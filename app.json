@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "Wheelers Connect",
+    "slug": "wheelers-connect",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "wheelersconnect",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "icon": "./assets/images/icon-ios.png",
+      "bundleIdentifier": "fr.gardowheelers.wheelersconnect",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "requireFullScreen": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "fr.gardowheelers.wheelersconnect",
+      "versionCode": 1
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/images/intro-wheelers.png",
+          "resizeMode": "cover",
+          "imageWidth": 430,
+          "enableFullScreenImage_legacy": true
+        }
+      ],
+      "expo-asset",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Wheelers Connect utilise votre position uniquement lorsque vous enregistrez volontairement un parcours."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "description": "Wheelers Connect — rencontres, sorties et communauté pour passionnés de gyroroue."
+  }
+}

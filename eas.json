@@ -1,0 +1,34 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tgyxhxhufcatkwlbxocg.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_gRlI_ab4uGRlyJVNN4F9Kg_9B08W2WF"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tgyxhxhufcatkwlbxocg.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_gRlI_ab4uGRlyJVNN4F9Kg_9B08W2WF"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tgyxhxhufcatkwlbxocg.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_gRlI_ab4uGRlyJVNN4F9Kg_9B08W2WF"
+      },
+      "distribution": "store"
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
