@@ -1,10 +1,10 @@
-import { localStorage as AsyncStorage, storageKey } from '../data/local-store';
 import { router } from 'expo-router';
-import { useAuth } from '../auth/auth-provider';
-import { LEGACY_LOCAL_ID, profileDefaults, wheelDefaults, legacyPreferences, rideTypes, isProfile, isWheel, type Profile, type Wheel, type WheelKey } from '../data/models';
 import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useAuth } from '../auth/auth-provider';
 import { ScreenBackButton } from '../components/screen-back-button';
+import { localStorage as AsyncStorage, storageKey } from '../data/local-store';
+import { isProfile, isWheel, LEGACY_LOCAL_ID, legacyPreferences, profileDefaults, rideTypes, wheelDefaults, type Profile, type Wheel, type WheelKey } from '../data/models';
 import { t } from '../i18n/i18n';
 
 const preferenceOptions = rideTypes;
@@ -335,7 +335,7 @@ practiceYears: profileDraft.practiceYears.trim(),
           <Text style={styles.wheelDetail}>⛰️ {wheels.main.terrain}</Text>
         </View>
       </Pressable>
-
+{wheels.second.name.trim() !== '' && (
       <Pressable pointerEvents="box-only" style={({ pressed }) => [styles.wheelCard, pressed && styles.pressedCard]}
         accessibilityRole="button" accessibilityLabel={`Voir la fiche de ${wheels.second.name || t('secondaryWheel')}`} accessibilityHint={t('secondaryWheel')}
         onPress={() => openWheel('second')}>
@@ -351,7 +351,7 @@ practiceYears: profileDraft.practiceYears.trim(),
           <Text style={styles.wheelDetail}>🏙️ {wheels.second.terrain}</Text>
         </View>
       </Pressable>
-
+)}
       <Text style={styles.sectionTitle}>{t('ridePreferences')}</Text>
 
       <View style={styles.tags}>
