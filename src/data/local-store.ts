@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { emptyUserData, isUserData, LEGACY_LOCAL_ID, legacyPreferences, legacyProfile, wheelDefaults, type UserData } from './models';
+import { emptyUserData, isUserData, LEGACY_LOCAL_ID, type UserData } from './models';
 
 export type LocalSnapshot = { version: 1; revision: number | null; dirty: boolean; imported: boolean; data: UserData };
 const locks = new Set<string>();
@@ -64,11 +64,17 @@ export async function importLegacyData(owner: string) {
     }
     const sections = ['profile', 'ride-preferences', 'wheels', 'rides'] as const;
     const raw = await Promise.all(sections.map(section => AsyncStorage.getItem(storageKey(LEGACY_LOCAL_ID, section))));
+
+    if (raw.every(value => value === null)) {
+      throw new Error('Aucune ancienne donnée locale à importer.');
+    }
+
+    const empty = emptyUserData();
     const data: UserData = {
-      profile: raw[0] === null ? legacyProfile : JSON.parse(raw[0]),
-      preferences: raw[1] === null ? legacyPreferences : JSON.parse(raw[1]),
-      wheels: raw[2] === null ? wheelDefaults(true) : JSON.parse(raw[2]),
-      rides: raw[3] === null ? [] : JSON.parse(raw[3]),
+      profile: raw[0] === null ? empty.profile : JSON.parse(raw[0]),
+      preferences: raw[1] === null ? empty.preferences : JSON.parse(raw[1]),
+      wheels: raw[2] === null ? empty.wheels : JSON.parse(raw[2]),
+      rides: raw[3] === null ? empty.rides : JSON.parse(raw[3]),
     };
     if (!isUserData(data)) throw new Error('Anciennes données invalides : aucun import effectué, originaux conservés.');
     // Reserve ownership first; a failed write can be retried by the same account.

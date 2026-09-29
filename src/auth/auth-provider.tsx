@@ -1,9 +1,8 @@
 import type { Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useState, type PropsWithChildren } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { getSupabase, getSupabaseConfigurationError } from '../lib/supabase';
-import { LEGACY_LOCAL_ID } from '../data/models';
 import { isDataBusy } from '../data/local-store';
+import { getSupabase, getSupabaseConfigurationError } from '../lib/supabase';
 
 type AuthContextValue = {
   session: Session | null;
@@ -55,7 +54,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, [attempt]);
 
-  const owner = session?.user.id ?? LEGACY_LOCAL_ID;
+  const owner = session?.user.id ?? '';
   const value: AuthContextValue = {
     session, owner, dataEpoch,
     refreshData: () => setDataEpoch(epoch => epoch + 1),

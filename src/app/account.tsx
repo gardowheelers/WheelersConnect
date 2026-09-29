@@ -1,14 +1,13 @@
-import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
-import * as Linking from 'expo-linking';
+import { useEffect, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { ScreenBackButton } from '../components/screen-back-button';
 import { useAuth } from '../auth/auth-provider';
-import { getSupabase, getSupabaseConfigurationError } from '../lib/supabase';
+import { ScreenBackButton } from '../components/screen-back-button';
+import { isCurrentUserAdmin } from '../data/admin';
 import { importLegacyData } from '../data/local-store';
 import { SyncConflictError, syncAccount } from '../data/remote-store';
-import { isCurrentUserAdmin } from '../data/admin';
 import { t } from '../i18n/i18n';
+import { getSupabase, getSupabaseConfigurationError } from '../lib/supabase';
 
 export default function AccountScreen() {
   const { session, owner, refreshData, signOut } = useAuth();
@@ -53,7 +52,7 @@ export default function AccountScreen() {
       return;
     }
     await run(async () => {
-      const redirectTo = Linking.createURL('/reset-password');
+const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.html';
       const { error } = await getSupabase().auth.resetPasswordForEmail(email.trim(), { redirectTo });
       if (error) throw new Error(t('resetEmailError'));
       return t('resetEmailSent');

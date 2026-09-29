@@ -26,7 +26,11 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "fr.gardowheelers.wheelersconnect",
-      "versionCode": 1
+      "versionCode": 2,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -56,6 +60,12 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "description": "Wheelers Connect — rencontres, sorties et communauté pour passionnés de gyroroue."
+    "description": "Wheelers Connect — rencontres, sorties et communauté pour passionnés de gyroroue.",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e53ce2b4-97e9-49f3-a6bc-e86d6c17da0a"
+      }
+    }
   }
 }
