@@ -92,17 +92,6 @@ export default function HomeScreen() {
           </View>
 
           <Text style={styles.slogan}>{t('homeSlogan')}</Text>
-
-          <Pressable
-            style={styles.notification}
-            hitSlop={8}
-            pointerEvents="box-only"
-            accessibilityRole="button"
-            accessibilityLabel={t('openMessages')}
-            onPress={() => navigate('/messages')}
-          >
-            <Text style={styles.notificationIcon}>🔔</Text>
-          </Pressable>
         </View>
 
         <Pressable
@@ -241,43 +230,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginTop: 12,
     textAlign: 'center',
-  },
-
-  notification: {
-    position: 'absolute',
-    right: 0,
-    top: 3,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: wcTheme.colors.glass,
-    borderWidth: 1,
-    borderColor: wcTheme.colors.border,
-    ...wcTheme.shadow.glow,
-  },
-
-  notificationIcon: {
-    fontSize: 22,
-  },
-
-  badge: {
-    position: 'absolute',
-    right: -5,
-    top: -5,
-    backgroundColor: wcTheme.colors.danger,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  badgeText: {
-    color: wcTheme.colors.text,
-    fontSize: 11,
-    fontWeight: '800',
   },
 
   searchBox: {

@@ -5,6 +5,7 @@ import { useAuth } from '../auth/auth-provider';
 import { ScreenBackButton } from '../components/screen-back-button';
 import { listDirectMessages, listMembers, sendDirectMessage, type DirectMessage, type MemberDirectoryEntry } from '../data/community-messages';
 import { t } from '../i18n/i18n';
+import { getSupabase } from '../lib/supabase';
 
 export default function MessagesScreen() {
   const { owner } = useAuth();
@@ -28,35 +29,47 @@ function MessagesContent() {
   const threadRef = useRef<ScrollView>(null);
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
+  const [onlineIds, setOnlineIds] = useState<Set<string>>(() => new Set());
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (silent = false) => {
     if (!userId) return;
     const version = ++requestVersion.current;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setStatus('');
     try {
-      const [memberRows, messageRows] = await Promise.all([listMembers(), listDirectMessages(userId)]);
+      const presenceCutoff = new Date(Date.now() - 90000).toISOString();
+      const [memberRows, messageRows, presenceResult] = await Promise.all([
+        listMembers(),
+        listDirectMessages(userId),
+        getSupabase()
+          .from('user_presence')
+          .select('user_id')
+          .gte('updated_at', presenceCutoff),
+      ]);
+      if (presenceResult.error) throw presenceResult.error;
       if (version !== requestVersion.current) return;
+
       setMembers(memberRows);
       setMessages(messageRows);
+      setOnlineIds(new Set((presenceResult.data ?? []).map(row => String(row.user_id))));
     } catch {
       if (version === requestVersion.current) setStatus(t('messagingUnavailable'));
     } finally {
-      if (version === requestVersion.current) setLoading(false);
+      if (!silent && version === requestVersion.current) setLoading(false);
     }
   }, [userId]);
 
   useFocusEffect(useCallback(() => {
     if (!userId) return;
     let busy = false;
-    const poll = async () => {
+    const poll = async (silent = true) => {
       if (busy || AppState.currentState === 'background' || AppState.currentState === 'inactive') return;
       busy = true;
-      try { await refresh(); } finally { busy = false; }
+      try { await refresh(silent); } finally { busy = false; }
     };
-    void poll();
-    const timer = setInterval(() => { void poll(); }, 5000);
-    const listener = AppState.addEventListener('change', state => { if (state === 'active') void poll(); });
+    void poll(false);
+    const timer = setInterval(() => { void poll(true); }, 5000);
+    const listener = AppState.addEventListener('change', state => { if (state === 'active') void poll(true); });
     return () => { clearInterval(timer); listener.remove(); requestVersion.current++; };
   }, [userId, refresh]));
 
@@ -78,6 +91,11 @@ function MessagesContent() {
       .filter((item) => item.last)
       .sort((a, b) => Date.parse(b.last.createdAt) - Date.parse(a.last.createdAt));
   }, [members, messages, userId]);
+
+  const availableMembers = useMemo(() => {
+    const conversationIds = new Set(conversations.map(({ member }) => member.userId));
+    return members.filter((member) => !conversationIds.has(member.userId));
+  }, [members, conversations]);
 
   const selectedMessages = selected
     ? messages.filter((message) =>
@@ -127,7 +145,7 @@ function MessagesContent() {
       {conversations.map(({ member, last }) => <Pressable key={member.userId} style={({ pressed }) => [styles.conversation, pressed && styles.glassPressed]} onPress={() => setSelected(member)}>
         <View style={styles.avatarWrap}>
           <View style={styles.avatar}><Text style={styles.avatarText}>👤</Text></View>
-          <View style={styles.onlineDot} />
+          {onlineIds.has(member.userId) ? <View style={styles.onlineDot} /> : null}
         </View>
         <View style={styles.messageInfo}>
           <Text style={styles.name}>{label(member)}</Text>
@@ -137,11 +155,11 @@ function MessagesContent() {
       </Pressable>)}
 
       <Text style={[styles.sectionTitle, { marginTop: 28 }]}>{t('availableWheelers')}</Text>
-      {members.length === 0 && !loading ? <Text style={styles.muted}>{t('noAvailableWheelers')}</Text> : null}
-      {members.map((member) => <Pressable key={member.userId} style={({ pressed }) => [styles.memberCard, pressed && styles.glassPressed]} onPress={() => setSelected(member)}>
+      {availableMembers.length === 0 && !loading ? <Text style={styles.muted}>{t('noAvailableWheelers')}</Text> : null}
+      {availableMembers.map((member) => <Pressable key={member.userId} style={({ pressed }) => [styles.memberCard, pressed && styles.glassPressed]} onPress={() => setSelected(member)}>
         <View style={styles.avatarWrap}>
           <View style={styles.avatar}><Text style={styles.avatarText}>👤</Text></View>
-          <View style={styles.onlineDot} />
+          {onlineIds.has(member.userId) ? <View style={styles.onlineDot} /> : null}
         </View>
         <View style={styles.memberText}>
           <Text style={styles.name}>{label(member)}</Text>
