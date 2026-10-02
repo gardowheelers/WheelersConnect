@@ -24,6 +24,12 @@ import { getSupabase } from '../lib/supabase';
 
 const preferenceOptions = rideTypes;
 
+function formatRangeKm(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return /\bkm\b/i.test(trimmed) ? trimmed : `${trimmed} km`;
+}
+
 const preferenceIcons: Record<string, string> = {
   'Voie verte': '🍃',
   'Forêt': '🌲',
@@ -644,6 +650,7 @@ function ProfileContent() {
   const saveInProgress = useRef(false);
 
   const wheel = selectedWheel ? wheels[selectedWheel] : null;
+  const isAddingSecondary = selectedWheel === 'second' && wheels.second.name.trim() === '' && draft !== null;
 
   const canSave = draft !== null && wheelFields.every(({ key }) => draft[key].trim().length > 0);
 
@@ -713,12 +720,26 @@ function ProfileContent() {
 
   }
 
+  function openSecondaryWheelFromPlus() {
+    if (saveInProgress.current || profileSaveInProgress.current || profileDraft !== null) return;
+
+    if (storageReady) setStorageError(null);
+    setSelectedWheel('second');
+
+    if (wheels.second.name.trim() === '') {
+      setDraft({ name: '', battery: '', range: '', terrain: '' });
+    } else {
+      setDraft({ ...wheels.second });
+    }
+  }
+
 
 
   function cancelWheelEdit() {
 
     if (saveInProgress.current) return;
 
+    if (isAddingSecondary) setSelectedWheel(null);
     setDraft(null);
 
     if (storageReady) setStorageError(null);
@@ -765,9 +786,10 @@ function ProfileContent() {
 
       await AsyncStorage.setItem(wheelsStorageKey, JSON.stringify(nextWheels));
 
+      const createdSecondary = selectedWheel === 'second' && wheels.second.name.trim() === '';
       setWheels(nextWheels);
-
       setDraft(null);
+      if (createdSecondary) setSelectedWheel(null);
 
     } catch {
 
@@ -811,7 +833,7 @@ function ProfileContent() {
 
         <Pressable style={styles.settingsButton} accessibilityRole="button" accessibilityLabel={t('editProfile')} onPress={openProfile}>
 
-          <Text style={styles.settingsIcon}>⚙️</Text>
+          <Text style={styles.settingsIcon}>✎</Text>
 
         </Pressable>
 
@@ -869,7 +891,7 @@ function ProfileContent() {
 
             <Pressable style={styles.avatarRemoveButton} onPress={removeAvatar}>
 
-              <Text style={styles.avatarRemoveText}>Retirer</Text>
+              <Text style={styles.avatarRemoveText}>Supprimer la photo</Text>
 
             </Pressable>
 
@@ -955,7 +977,7 @@ function ProfileContent() {
 
       <View style={styles.sectionHeader}>
         <Text style={[styles.sectionTitle, styles.sectionTitleInHeader]}>{t('myWheels')}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="Ajouter ou modifier la roue secondaire" style={styles.roundAction} onPress={() => openWheel('second')}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Ajouter ou modifier la roue secondaire" style={styles.roundAction} onPress={openSecondaryWheelFromPlus}>
           <Text style={styles.roundActionText}>＋</Text>
         </Pressable>
       </View>
@@ -982,7 +1004,7 @@ function ProfileContent() {
           <Text style={styles.wheelName}>{wheels.main.name || t('mainWheel')}</Text>
           <Text style={styles.primary}>{t('mainWheel')}</Text>
           <Text style={styles.wheelDetail}>⚡ {wheels.main.battery}</Text>
-          <Text style={styles.wheelDetail}>🛣️ {wheels.main.range}</Text>
+          <Text style={styles.wheelDetail}>🛣️ {formatRangeKm(wheels.main.range)}</Text>
           <Text style={styles.wheelDetail}>⛰️ {wheels.main.terrain}</Text>
         </View>
         <Text style={styles.wheelChevron}>›</Text>
@@ -1010,7 +1032,7 @@ function ProfileContent() {
             <Text style={styles.wheelName}>{wheels.second.name || t('secondaryWheel')}</Text>
             <Text style={styles.secondary}>{t('secondaryWheel')}</Text>
             <Text style={styles.wheelDetail}>⚡ {wheels.second.battery}</Text>
-            <Text style={styles.wheelDetail}>🛣️ {wheels.second.range}</Text>
+            <Text style={styles.wheelDetail}>🛣️ {formatRangeKm(wheels.second.range)}</Text>
             <Text style={styles.wheelDetail}>🏙️ {wheels.second.terrain}</Text>
           </View>
           <Text style={styles.wheelChevron}>›</Text>
@@ -1022,9 +1044,6 @@ function ProfileContent() {
 
       <View style={styles.sectionHeader}>
         <Text style={[styles.sectionTitle, styles.sectionTitleInHeader]}>{t('ridePreferences')}</Text>
-        <View pointerEvents="none" style={styles.roundAction}>
-          <Text style={styles.roundEditText}>✎</Text>
-        </View>
       </View>
 
       <View style={styles.tags}>
@@ -1211,7 +1230,9 @@ function ProfileContent() {
 
                 <Text style={styles.wheelEmoji}>🛞</Text>
 
-                <Text style={styles.wheelName} accessibilityRole="header">{draft ? t('editWheel') : wheel.name}</Text>
+                <Text style={styles.wheelName} accessibilityRole="header">
+                  {isAddingSecondary ? 'Ajouter une roue' : draft ? t('editWheel') : wheel.name}
+                </Text>
 
                 <Text style={selectedWheel === 'main' ? styles.primary : styles.secondary}>
 
@@ -1243,7 +1264,7 @@ function ProfileContent() {
 
                       />
 
-                    ) : <Text style={styles.wheelDetail}>{wheel[key]}</Text>}
+                    ) : <Text style={styles.wheelDetail}>{key === 'range' ? formatRangeKm(wheel[key]) : wheel[key]}</Text>}
 
                   </View>); })()
 
@@ -1269,17 +1290,19 @@ function ProfileContent() {
 
                   }}>
 
-                    <Text style={styles.tagActiveText}>{draft ? t('save') : t('edit')}</Text>
+                    <Text style={styles.tagActiveText}>
+                      {isAddingSecondary ? 'Ajouter la roue' : draft ? t('save') : t('edit')}
+                    </Text>
 
                   </Pressable>
 
                   {draft && <Pressable accessibilityRole="button" disabled={saving} style={[styles.actionButton, styles.closeButton]} onPress={cancelWheelEdit}><Text style={styles.tagText}>{t('cancel')}</Text></Pressable>}
 
-                  <Pressable accessibilityRole="button" disabled={saving} style={[styles.actionButton, styles.closeButton]} onPress={closeWheel}>
-
-                    <Text style={styles.tagText}>{t('close')}</Text>
-
-                  </Pressable>
+                  {!isAddingSecondary && (
+                    <Pressable accessibilityRole="button" disabled={saving} style={[styles.actionButton, styles.closeButton]} onPress={closeWheel}>
+                      <Text style={styles.tagText}>{t('close')}</Text>
+                    </Pressable>
+                  )}
 
                 </View>
 
