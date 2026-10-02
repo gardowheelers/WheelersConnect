@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline, type LatLng } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScreenBackButton } from '../components/screen-back-button';
@@ -33,6 +33,16 @@ function formatDuration(ms: number) {
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   return h > 0 ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min ${String(s).padStart(2, '0')} s`;
+}
+
+function formatClock(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 const MAP_DARK_STYLE = [
@@ -70,15 +80,17 @@ export default function ParcoursGpsScreen() {
   const [distanceM, setDistanceM] = useState(0);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [gpsMessage, setGpsMessage] = useState('GPS prêt à être testé');
+  const [gpsMessage, setGpsMessage] = useState('GPS prêt');
   const [lastAccuracy, setLastAccuracy] = useState<number | null>(null);
   const [lastStepM, setLastStepM] = useState(0);
   const [savedRides, setSavedRides] = useState<SavedRide[]>([]);
   const watchRef = useRef<any>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastAcceptedRef = useRef<Point | null>(null);
+  const distanceAnchorRef = useRef<Point | null>(null);
   const lastUpdateAtRef = useRef(0);
   const mapRef = useRef<MapView | null>(null);
+  const speedNeedle = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     void AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
@@ -125,19 +137,34 @@ export default function ParcoursGpsScreen() {
     const last = lastAcceptedRef.current;
     if (last) {
       const delta = metersBetween(last, p);
-      const dt = Math.max(1, (p.timestamp - last.timestamp) / 1000);
-      const impliedKmh = (delta / dt) * 3.6;
       setLastStepM(delta);
-      // Rejette seulement les sauts GPS manifestement impossibles.
-      // Les petits déplacements sont conservés pour que la marche soit visible au test.
-      if (delta >= 0.25 && delta < 500 && impliedKmh < 140) {
-        setDistanceM((d) => d + delta);
-      }
-      // Avoid storing a stream of identical stationary points.
+
+      // Évite de stocker un flux de points presque identiques à l'arrêt.
       if (delta < 0.5 && p.timestamp - last.timestamp < 5000) {
         lastUpdateAtRef.current = Date.now();
         setGpsMessage('Signal GPS reçu • position stable');
         return;
+      }
+    }
+
+    // La distance utilise un point d'ancrage indépendant.
+    // On n'ajoute un déplacement que lorsqu'il dépasse clairement l'incertitude GPS.
+    const anchor = distanceAnchorRef.current;
+    if (!anchor) {
+      distanceAnchorRef.current = p;
+    } else {
+      const anchorDelta = metersBetween(anchor, p);
+      const anchorAccuracy = Math.max(
+        Number(anchor.accuracy ?? 0),
+        Number(p.accuracy ?? 0),
+      );
+      const movementThresholdM = Math.max(3, Math.min(10, anchorAccuracy * 1.5));
+      const anchorDt = Math.max(1, (p.timestamp - anchor.timestamp) / 1000);
+      const impliedKmh = (anchorDelta / anchorDt) * 3.6;
+
+      if (anchorDelta >= movementThresholdM && anchorDelta < 500 && impliedKmh < 140) {
+        setDistanceM((d) => d + anchorDelta);
+        distanceAnchorRef.current = p;
       }
     }
 
@@ -204,7 +231,7 @@ export default function ParcoursGpsScreen() {
 
   const start = async () => {
     setPoints([]); setDistanceM(0); setElapsed(0); setLastStepM(0); setLastAccuracy(null); setGpsMessage('Initialisation du GPS…');
-    lastAcceptedRef.current = null; lastUpdateAtRef.current = 0;
+    lastAcceptedRef.current = null; distanceAnchorRef.current = null; lastUpdateAtRef.current = 0;
     const ok = await beginWatch();
     if (!ok) return;
     setStartedAt(Date.now());
@@ -271,16 +298,46 @@ export default function ParcoursGpsScreen() {
   }, [latestCoordinate?.latitude, latestCoordinate?.longitude]);
 
   const currentSpeed = (() => {
-    if (!points.length) return 0;
-    const latest = points[points.length - 1];
-    const nativeKmh = typeof latest.speed === 'number' && latest.speed > 0 ? latest.speed * 3.6 : 0;
-    if (nativeKmh > 0) return nativeKmh;
     if (points.length < 2) return 0;
-    const previous = points[points.length - 2];
+
+    const latest = points[points.length - 1];
+    const previous = points[Math.max(0, points.length - 5)];
+    const delta = metersBetween(previous, latest);
     const dt = Math.max(1, (latest.timestamp - previous.timestamp) / 1000);
-    const fallbackKmh = (metersBetween(previous, latest) / dt) * 3.6;
-    return fallbackKmh < 120 ? fallbackKmh : 0;
+    const accuracy = Math.max(
+      Number(previous.accuracy ?? 0),
+      Number(latest.accuracy ?? 0),
+    );
+    const movementThresholdM = Math.max(3, Math.min(10, accuracy * 1.5));
+
+    // Tant que le déplacement reste dans la marge d'erreur GPS, la vitesse affichée
+    // reste à zéro : cela supprime les faux 1–10 km/h lorsque le téléphone est immobile.
+    if (delta < movementThresholdM) return 0;
+
+    const fallbackKmh = (delta / dt) * 3.6;
+    const nativeKmh =
+      typeof latest.speed === 'number' && latest.speed > 0
+        ? latest.speed * 3.6
+        : 0;
+
+    const measuredKmh = nativeKmh > 0 ? nativeKmh : fallbackKmh;
+    return measuredKmh < 120 ? measuredKmh : 0;
   })();
+  const speedForGauge = Math.max(0, Math.min(100, currentSpeed));
+
+  useEffect(() => {
+    Animated.timing(speedNeedle, {
+      toValue: speedForGauge,
+      duration: 420,
+      useNativeDriver: true,
+    }).start();
+  }, [speedForGauge, speedNeedle]);
+
+  const needleRotation = speedNeedle.interpolate({
+    inputRange: [0, 100],
+    outputRange: ['-120deg', '120deg'],
+  });
+
   const stateLabel =
     status === 'recording'
       ? 'Enregistrement en cours'
@@ -395,23 +452,51 @@ export default function ParcoursGpsScreen() {
           </View>
         </View>
 
-        <View style={styles.stats}>
-          <View style={styles.stat}>
-            <Ionicons name="map-outline" size={20} color={wcTheme.colors.cyan} />
-            <Text style={styles.value}>{(distanceM / 1000).toFixed(2)}</Text>
-            <Text style={styles.label}>km</Text>
+        <View style={styles.dashboard}>
+          <View style={styles.speedCard}>
+            <Text style={styles.speedTitle}>Vitesse</Text>
+
+            <View style={styles.speedometer}>
+              <View style={styles.gaugeArc}>
+                <Text style={[styles.gaugeMark, styles.gaugeMarkZero]}>0</Text>
+                <Text style={[styles.gaugeMark, styles.gaugeMarkFifty]}>50</Text>
+                <Text style={[styles.gaugeMark, styles.gaugeMarkHundred]}>100</Text>
+
+                <Animated.View
+                  style={[
+                    styles.needleWrap,
+                    { transform: [{ rotate: needleRotation }] },
+                  ]}
+                >
+                  <View style={styles.needle} />
+                </Animated.View>
+
+                <View style={styles.needleCenter} />
+
+                <View style={styles.speedReadout}>
+                  <Text style={styles.speedValue}>{currentSpeed.toFixed(1)}</Text>
+                  <Text style={styles.speedUnit}>km/h</Text>
+                </View>
+              </View>
+            </View>
           </View>
 
-          <View style={styles.stat}>
-            <Ionicons name="time-outline" size={20} color={wcTheme.colors.green} />
-            <Text style={styles.valueDuration}>{formatDuration(elapsed)}</Text>
-            <Text style={styles.label}>durée</Text>
-          </View>
+          <View style={styles.sideStats}>
+            <View style={styles.sideStatCard}>
+              <Ionicons name="map-outline" size={20} color={wcTheme.colors.cyan} />
+              <View style={styles.sideStatText}>
+                <Text style={styles.sideStatLabel}>Distance</Text>
+                <Text style={styles.sideStatValue}>{(distanceM / 1000).toFixed(2)} km</Text>
+              </View>
+            </View>
 
-          <View style={styles.stat}>
-            <Ionicons name="speedometer-outline" size={20} color={wcTheme.colors.cyan} />
-            <Text style={styles.value}>{currentSpeed.toFixed(1)}</Text>
-            <Text style={styles.label}>km/h</Text>
+            <View style={styles.sideStatCard}>
+              <Ionicons name="time-outline" size={20} color={wcTheme.colors.green} />
+              <View style={styles.sideStatText}>
+                <Text style={styles.sideStatLabel}>Temps</Text>
+                <Text style={styles.sideStatValue}>{formatClock(elapsed)}</Text>
+              </View>
+            </View>
           </View>
         </View>
 
@@ -458,8 +543,7 @@ export default function ParcoursGpsScreen() {
         <View style={styles.note}>
           <Ionicons name="shield-checkmark-outline" size={24} color={wcTheme.colors.green} />
           <Text style={styles.noteText}>
-            Les points GPS bruts restent enregistrés pour préserver la précision du parcours
-            et permettre plus tard l’export GPX. Seul l’affichage de la trace est lissé.
+            Points GPS conservés • trace lissée à l’écran.
           </Text>
         </View>
 
@@ -512,7 +596,7 @@ export default function ParcoursGpsScreen() {
                 style={styles.rideDelete}
                 onPress={() => deleteRide(ride)}
               >
-                <Ionicons name="trash-outline" size={22} color={wcTheme.colors.danger} />
+                <Ionicons name="trash-outline" size={21} color={ACTION_CYAN} />
               </Pressable>
             </View>
           ))}
@@ -659,31 +743,152 @@ const styles = StyleSheet.create({
     backgroundColor: wcTheme.colors.cyan,
   },
 
-  stats: { flexDirection: 'row', gap: 10, marginVertical: 16 },
-  stat: {
-    flex: 1,
-    minHeight: 118,
-    borderRadius: 24,
-    paddingHorizontal: 7,
+  dashboard: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+    alignItems: 'stretch',
+  },
+
+  speedCard: {
+    flex: 1.28,
+    minHeight: 188,
+    borderRadius: 26,
+    padding: 12,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: wcTheme.colors.glass,
     borderWidth: 1,
     borderColor: wcTheme.colors.border,
+    ...wcTheme.shadow.glow,
+  },
+  speedTitle: {
+    color: wcTheme.colors.textMuted,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  speedometer: {
+    width: 154,
+    height: 154,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gaugeArc: {
+    width: 148,
+    height: 148,
+    borderRadius: 74,
+    borderWidth: 5,
+    borderColor: 'rgba(56,231,255,0.62)',
+    borderBottomColor: 'rgba(87,243,107,0.18)',
+    backgroundColor: 'rgba(4,17,26,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    shadowColor: wcTheme.colors.cyan,
+    shadowOpacity: 0.24,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  gaugeMark: {
+    position: 'absolute',
+    color: wcTheme.colors.textSoft,
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  gaugeMarkZero: { left: 16, bottom: 32 },
+  gaugeMarkFifty: { top: 12, left: 66 },
+  gaugeMarkHundred: { right: 10, bottom: 32 },
+  needleWrap: {
+    position: 'absolute',
+    width: 118,
+    height: 118,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  needle: {
+    width: 3,
+    height: 54,
+    borderRadius: 3,
+    backgroundColor: wcTheme.colors.green,
+    shadowColor: wcTheme.colors.green,
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  needleCenter: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: wcTheme.colors.cyan,
+    borderWidth: 3,
+    borderColor: wcTheme.colors.bg,
+  },
+  speedReadout: {
+    position: 'absolute',
+    bottom: 22,
+    alignItems: 'center',
+  },
+  speedValue: {
+    color: wcTheme.colors.text,
+    fontSize: 27,
+    lineHeight: 30,
+    fontWeight: '900',
+  },
+  speedUnit: {
+    color: wcTheme.colors.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 1,
+  },
+
+  sideStats: {
+    flex: 0.92,
+    gap: 10,
+  },
+  sideStatCard: {
+    flex: 1,
+    minHeight: 88,
+    borderRadius: 22,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
     ...wcTheme.shadow.soft,
   },
-  value: { color: wcTheme.colors.text, fontSize: 25, fontWeight: '900', textAlign: 'center', marginTop: 5 },
-  valueDuration: { color: wcTheme.colors.text, fontSize: 17, lineHeight: 20, fontWeight: '900', textAlign: 'center', marginTop: 7 },
-  label: { color: wcTheme.colors.textMuted, fontSize: 12, fontWeight: '800', marginTop: 3 },
+  sideStatText: { flex: 1 },
+  sideStatLabel: {
+    color: wcTheme.colors.textMuted,
+    fontSize: 11,
+    fontWeight: '800',
+    marginBottom: 5,
+  },
+  sideStatValue: {
+    color: wcTheme.colors.text,
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: '900',
+  },
 
   primary: {
     minHeight: 64,
     borderRadius: 24,
     paddingHorizontal: 18,
+    marginTop: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 11,
+    backgroundColor: 'rgba(87,243,107,0.14)',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.green,
     ...wcTheme.shadow.greenGlow,
     ...ACTION_GLASS,
   },
@@ -692,31 +897,37 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: wcTheme.colors.green,
   },
-  primaryText: { fontSize: 19,
+  primaryText: { color: wcTheme.colors.green, fontSize: 19, fontWeight: '900',
     ...ACTION_TEXT, },
 
-  actions: { flexDirection: 'row', gap: 12 },
+  actions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   secondary: {
     flex: 1,
-    minHeight: 60,
-    borderRadius: 22,
+    minHeight: 50,
+    borderRadius: 18,
     flexDirection: 'row',
     gap: 8,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
     ...ACTION_GLASS,
   },
   stop: {
     flex: 1,
-    minHeight: 60,
-    borderRadius: 22,
+    minHeight: 50,
+    borderRadius: 18,
     flexDirection: 'row',
     gap: 8,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,107,125,0.14)',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.danger,
     ...ACTION_GLASS,
   },
-  secondaryText: { fontSize: 16,
+  secondaryText: { fontSize: 16, fontWeight: '900', color: '#fff',
     ...ACTION_TEXT, },
 
   debugGlass: {
@@ -762,16 +973,8 @@ const styles = StyleSheet.create({
     borderColor: wcTheme.colors.borderSoft,
   },
   rideOpen: { flex: 1, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 11 },
-  rideDelete: {
-    width: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderLeftWidth: 1,
-    ...ACTION_GLASS,
-    backgroundColor: 'rgba(255, 68, 84, 0.10)',
-    borderColor: 'rgba(255, 68, 84, 0.58)',
-    borderLeftColor: 'rgba(255, 68, 84, 0.78)',
-  },
+  rideDelete: { width: 52, alignItems: 'center', justifyContent: 'center', borderLeftWidth: 1, borderLeftColor: wcTheme.colors.borderSoft,
+    ...ACTION_GLASS, },
   rideIcon: {
     width: 44, height: 44, borderRadius: 15,
     alignItems: 'center', justifyContent: 'center',

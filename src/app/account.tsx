@@ -4,9 +4,8 @@ import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleShee
 import { useAuth } from '../auth/auth-provider';
 import { ScreenBackButton } from '../components/screen-back-button';
 import { isCurrentUserAdmin } from '../data/admin';
-import { importLegacyData } from '../data/local-store';
 import { forceUploadLocal, SyncConflictError, syncAccount } from '../data/remote-store';
-import { t } from '../i18n/i18n';
+import { getLanguage, t } from '../i18n/i18n';
 import { getSupabase, getSupabaseConfigurationError } from '../lib/supabase';
 
 export default function AccountScreen() {
@@ -19,6 +18,45 @@ export default function AccountScreen() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [syncConflict, setSyncConflict] = useState(false);
   const configError = getSupabaseConfigurationError();
+
+  const accountCopy = {
+    fr: {
+      autoSyncInfo: 'Vos données se synchronisent automatiquement avec votre compte.',
+      syncNow: 'Synchroniser maintenant',
+      restoreCloud: 'Restaurer depuis le cloud',
+      restoreTitle: 'Restaurer depuis le cloud',
+      restoreText: 'La copie actuellement affichée sera archivée sur cet iPhone, puis remplacée par la version du cloud. Continuer ?',
+      restoreAction: 'Restaurer',
+      keepPhone: 'Garder cet iPhone et remplacer le cloud',
+    },
+    en: {
+      autoSyncInfo: 'Your data syncs automatically with your account.',
+      syncNow: 'Sync now',
+      restoreCloud: 'Restore from cloud',
+      restoreTitle: 'Restore from cloud',
+      restoreText: 'The copy currently shown will be archived on this iPhone, then replaced with the cloud version. Continue?',
+      restoreAction: 'Restore',
+      keepPhone: 'Keep this iPhone and replace the cloud',
+    },
+    pt: {
+      autoSyncInfo: 'Seus dados são sincronizados automaticamente com sua conta.',
+      syncNow: 'Sincronizar agora',
+      restoreCloud: 'Restaurar da nuvem',
+      restoreTitle: 'Restaurar da nuvem',
+      restoreText: 'A cópia exibida atualmente será arquivada neste iPhone e depois substituída pela versão da nuvem. Continuar?',
+      restoreAction: 'Restaurar',
+      keepPhone: 'Manter este iPhone e substituir a nuvem',
+    },
+    es: {
+      autoSyncInfo: 'Tus datos se sincronizan automáticamente con tu cuenta.',
+      syncNow: 'Sincronizar ahora',
+      restoreCloud: 'Restaurar desde la nube',
+      restoreTitle: 'Restaurar desde la nube',
+      restoreText: 'La copia que se muestra actualmente se archivará en este iPhone y después se sustituirá por la versión de la nube. ¿Continuar?',
+      restoreAction: 'Restaurar',
+      keepPhone: 'Conservar este iPhone y reemplazar la nube',
+    },
+  }[getLanguage()];
 
   useEffect(() => {
     let active = true;
@@ -98,9 +136,6 @@ const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.htm
     );
   }
 
-  async function importLocal() {
-    await run(async () => { await importLegacyData(owner); refreshData(); return t('localDataAttached'); });
-  }
   async function synchronize(download = false) {
     if (busy) return;
     setBusy(true);
@@ -114,7 +149,7 @@ const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.htm
     } catch (error) {
       if (error instanceof SyncConflictError && !download) {
         setSyncConflict(true);
-        setMessage('Deux versions différentes existent. Votre copie locale est conservée. Si cet iPhone contient la bonne version, utilisez le bouton ci-dessous pour remplacer le cloud.');
+        setMessage('Deux versions différentes existent. Votre copie locale est conservée.');
       } else {
         setMessage(error instanceof Error ? error.message : t('genericRetryError'));
       }
@@ -140,6 +175,26 @@ const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.htm
     }
   }
 
+  function confirmRestoreFromCloud() {
+    if (busy) return;
+
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(accountCopy.restoreText)) {
+        void synchronize(true);
+      }
+      return;
+    }
+
+    Alert.alert(
+      accountCopy.restoreTitle,
+      accountCopy.restoreText,
+      [
+        { text: t('cancel'), style: 'cancel' },
+        { text: accountCopy.restoreAction, style: 'destructive', onPress: () => { void synchronize(true); } },
+      ],
+    );
+  }
+
   return <KeyboardAvoidingView style={styles.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <ScreenBackButton />
@@ -159,17 +214,24 @@ const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.htm
       </View> : <View style={styles.card}>
         <Text style={styles.section}>{t('connectedAccount')}</Text>
         <Text style={styles.email}>{session.user.email ?? t('wheelersConnectAccount')}</Text>
-        <Text style={styles.small}>{t('localDataStayDevice')}</Text>
-        <Pressable disabled={busy} style={[styles.button, busy && styles.disabled]} onPress={importLocal}><Text style={styles.buttonText}>{t('importData')}</Text></Pressable>
-        <Pressable disabled={busy} style={[styles.button, styles.secondary, busy && styles.disabled]} onPress={() => synchronize(false)}><Text style={styles.buttonText}>{t('syncCloud')}</Text></Pressable>
+        <Text style={styles.small}>{accountCopy.autoSyncInfo}</Text>
+        <Pressable disabled={busy} style={[styles.button, styles.secondary, busy && styles.disabled]} onPress={() => synchronize(false)}>
+          <Text style={styles.buttonText}>{accountCopy.syncNow}</Text>
+        </Pressable>
         {syncConflict && (
           <Pressable disabled={busy} style={[styles.button, styles.localWins, busy && styles.disabled]} onPress={keepThisPhoneAsReference}>
-            <Text style={styles.buttonText}>Garder cet iPhone et remplacer le cloud</Text>
+            <Text style={styles.buttonText}>{accountCopy.keepPhone}</Text>
           </Pressable>
         )}
-        <Pressable disabled={busy} style={[styles.button, styles.caution, busy && styles.disabled]} onPress={() => synchronize(true)}><Text style={styles.buttonText}>{t('restoreCloud')}</Text></Pressable>
-        <Pressable disabled={busy} style={[styles.button, styles.logout, busy && styles.disabled]} onPress={() => run(async () => { await signOut(); return t('signedOut'); })}><Text style={styles.buttonText}>{t('signOut')}</Text></Pressable>
-        <Pressable disabled={busy} style={[styles.button, styles.delete, busy && styles.disabled]} onPress={deleteAccount}><Text style={styles.buttonText}>{t('deleteAccount')}</Text></Pressable>
+        <Pressable disabled={busy} style={[styles.button, styles.caution, busy && styles.disabled]} onPress={confirmRestoreFromCloud}>
+          <Text style={styles.buttonText}>{accountCopy.restoreCloud}</Text>
+        </Pressable>
+        <Pressable disabled={busy} style={[styles.button, styles.logout, busy && styles.disabled]} onPress={() => run(async () => { await signOut(); return t('signedOut'); })}>
+          <Text style={styles.buttonText}>{t('signOut')}</Text>
+        </Pressable>
+        <Pressable disabled={busy} style={[styles.button, styles.delete, busy && styles.disabled]} onPress={deleteAccount}>
+          <Text style={styles.buttonText}>{t('deleteAccount')}</Text>
+        </Pressable>
       </View>}
       {message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
       {busy ? <Text style={styles.small}>{t('operationInProgress')}</Text> : null}
@@ -295,6 +357,9 @@ const styles = StyleSheet.create({
 
   caution: {
     ...ACTION_GLASS,
+    backgroundColor: 'rgba(201, 156, 42, 0.13)',
+    borderColor: 'rgba(255, 205, 75, 0.86)',
+    shadowColor: '#E7B83D',
   },
 
   logout: {
@@ -303,6 +368,10 @@ const styles = StyleSheet.create({
 
   delete: {
     ...ACTION_GLASS,
+    backgroundColor: 'rgba(186, 35, 49, 0.18)',
+    borderColor: 'rgba(255, 68, 84, 0.92)',
+    shadowColor: '#FF3347',
+    shadowOpacity: 0.32,
   },
 
   localWins: {
