@@ -4,7 +4,7 @@ import { archiveSnapshot, readSnapshot, withDataLock, writeSnapshot } from './lo
 
 type RemoteSnapshot = { user_id: string; revision: number; data: UserData };
 export class SyncConflictError extends Error {
-  constructor() { super('Une autre version existe sur Supabase. Votre copie locale est conservée. Vous pouvez l’archiver puis récupérer la version distante.'); }
+  constructor() { super('Une autre version existe sur Supabase. Votre copie locale est conservée.'); }
 }
 async function requireOwner(owner: string) {
   const client = getSupabase();
@@ -47,5 +47,38 @@ export async function syncAccount(owner: string, archiveAndDownload = false) {
     await requireOwner(owner);
     await writeSnapshot(owner, { ...local, revision, dirty: false });
     return 'Profil, préférences, roues et sorties synchronisés.';
+  });
+}
+
+export async function forceUploadLocal(owner: string) {
+  return withDataLock(owner, async () => {
+    const local = await readSnapshot(owner);
+
+    // On relit toujours la révision distante juste avant l'écriture.
+    // Cela permet de conserver la copie locale choisie par l'utilisateur
+    // sans désactiver la protection transactionnelle de Supabase.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const remote = await readRemoteSnapshot(owner);
+      const client = await requireOwner(owner);
+      const { data: revision, error } = await client.rpc('write_user_data', {
+        p_user_id: owner,
+        p_expected_revision: remote.revision,
+        p_data: local.data,
+      });
+
+      if (error?.code === '40001') continue;
+      if (error) {
+        throw new Error('Impossible de remplacer la version cloud. Votre copie locale est conservée.');
+      }
+      if (!Number.isSafeInteger(revision) || revision !== remote.revision + 1) {
+        throw new Error('Réponse Supabase inattendue. Votre copie locale est conservée.');
+      }
+
+      await requireOwner(owner);
+      await writeSnapshot(owner, { ...local, revision, dirty: false });
+      return 'Cet iPhone est maintenant la version de référence. Le cloud a été mis à jour.';
+    }
+
+    throw new SyncConflictError();
   });
 }

@@ -2,9 +2,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import MapView, { Marker, Polyline, type LatLng } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScreenBackButton } from '../components/screen-back-button';
 import { router } from 'expo-router';
+import { wcTheme } from '../theme/wheelers-theme';
 
 // expo-location est chargé au lancement de cet écran. Il fonctionne dans Expo Go en premier plan.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -33,6 +35,35 @@ function formatDuration(ms: number) {
   return h > 0 ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min ${String(s).padStart(2, '0')} s`;
 }
 
+const MAP_DARK_STYLE = [
+  { elementType: 'geometry', stylers: [{ color: '#081821' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#8ba5b3' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#081821' }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#244553' }] },
+  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#0b202a' }] },
+  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#0c242f' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#17313d' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#214958' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#122d38' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#041019' }] },
+];
+
+function smoothTrack(points: Point[]): LatLng[] {
+  if (points.length <= 2) {
+    return points.map(({ latitude, longitude }) => ({ latitude, longitude }));
+  }
+
+  return points.map((_, index) => {
+    const from = Math.max(0, index - 2);
+    const to = Math.min(points.length - 1, index + 2);
+    const sample = points.slice(from, to + 1);
+    return {
+      latitude: sample.reduce((sum, p) => sum + p.latitude, 0) / sample.length,
+      longitude: sample.reduce((sum, p) => sum + p.longitude, 0) / sample.length,
+    };
+  });
+}
+
 export default function ParcoursGpsScreen() {
   const [status, setStatus] = useState<'idle' | 'recording' | 'paused'>('idle');
   const [points, setPoints] = useState<Point[]>([]);
@@ -47,6 +78,7 @@ export default function ParcoursGpsScreen() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastAcceptedRef = useRef<Point | null>(null);
   const lastUpdateAtRef = useRef(0);
+  const mapRef = useRef<MapView | null>(null);
 
   useEffect(() => {
     void AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
@@ -225,6 +257,19 @@ export default function ParcoursGpsScreen() {
     );
   };
 
+
+  const displayTrack = smoothTrack(points);
+  const firstCoordinate = displayTrack[0] ?? null;
+  const latestCoordinate = displayTrack[displayTrack.length - 1] ?? null;
+
+  useEffect(() => {
+    if (!latestCoordinate || !mapRef.current) return;
+    mapRef.current.animateCamera(
+      { center: latestCoordinate, zoom: 17 },
+      { duration: 500 }
+    );
+  }, [latestCoordinate?.latitude, latestCoordinate?.longitude]);
+
   const currentSpeed = (() => {
     if (!points.length) return 0;
     const latest = points[points.length - 1];
@@ -236,46 +281,505 @@ export default function ParcoursGpsScreen() {
     const fallbackKmh = (metersBetween(previous, latest) / dt) * 3.6;
     return fallbackKmh < 120 ? fallbackKmh : 0;
   })();
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}>
-    <ScreenBackButton />
-    <Text style={styles.versionBadge}>GPS 9 • PARCOURS PROPRES</Text>
-    <Text style={styles.title}>Enregistrer un parcours</Text>
-    <Text style={styles.subtitle}>Le GPS de votre téléphone trace votre balade uniquement quand vous le décidez.</Text>
-    <View style={styles.live}><Ionicons name="navigate-circle" size={66} color="#34d12f" /><Text style={styles.state}>{status === 'recording' ? 'Enregistrement en cours' : status === 'paused' ? 'En pause' : 'Prêt à rouler'}</Text><Text style={styles.gpsSignal}>{gpsMessage}</Text>{status !== 'idle' ? <Text style={styles.gpsDebug}>Précision : {lastAccuracy == null ? '—' : `${Math.round(lastAccuracy)} m`}  •  Dernier déplacement : {lastStepM.toFixed(1)} m</Text> : null}</View>
-    <View style={styles.stats}>
-      <View style={styles.stat}><Text style={styles.value}>{(distanceM / 1000).toFixed(2)}</Text><Text style={styles.label}>km</Text></View>
-      <View style={styles.stat}><Text style={styles.value}>{formatDuration(elapsed)}</Text><Text style={styles.label}>durée</Text></View>
-      <View style={styles.stat}><Text style={styles.value}>{currentSpeed.toFixed(1)}</Text><Text style={styles.label}>km/h</Text></View>
-    </View>
-    {status === 'idle' ? <Pressable style={styles.primary} onPress={() => void start()}><Ionicons name="play" size={24} color="#071a23" /><Text style={styles.primaryText}>Démarrer</Text></Pressable> : <View style={styles.actions}>
-      {status === 'recording' ? <Pressable style={styles.secondary} onPress={pause}><Ionicons name="pause" size={22} color="#fff" /><Text style={styles.secondaryText}>Pause</Text></Pressable> : <Pressable style={styles.secondary} onPress={() => void resume()}><Ionicons name="play" size={22} color="#fff" /><Text style={styles.secondaryText}>Reprendre</Text></Pressable>}
-      <Pressable style={styles.stop} onPress={() => void stop()}><Ionicons name="stop" size={22} color="#fff" /><Text style={styles.secondaryText}>Terminer</Text></Pressable>
-    </View>}
-    <View style={styles.note}><Ionicons name="shield-checkmark-outline" size={24} color="#34d12f" /><Text style={styles.noteText}>Aucun suivi ne démarre tout seul. Cette première version enregistre le GPS lorsque Wheelers Connect reste ouvert. Le suivi écran verrouillé sera activé dans la version installable finale.</Text></View>
-    <View style={styles.history}>
-      <Text style={styles.historyTitle}>Mes parcours</Text>
-      <Text style={styles.historySubtitle}>{savedRides.length ? `${savedRides.length} parcours enregistré${savedRides.length > 1 ? 's' : ''} sur cet iPhone` : 'Aucun parcours enregistré pour le moment'}</Text>
-      {savedRides.slice(0, 5).map((ride) => (
-        <View key={ride.id} style={styles.rideCard}>
-          <Pressable style={styles.rideOpen} onPress={() => {
-            void AsyncStorage.setItem(SELECTED_RIDE_KEY, ride.id).then(() => {
-              router.push({ pathname: '/parcours-detail', params: { id: ride.id } });
-            });
-          }}>
-            <View style={styles.rideIcon}><Ionicons name="map-outline" size={24} color="#34d12f" /></View>
-            <View style={styles.rideMain}>
-              <Text style={styles.rideDate}>{new Date(ride.startedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}</Text>
-              <Text style={styles.rideMeta}>{(ride.distanceM / 1000).toFixed(2)} km  •  {formatDuration(ride.endedAt - ride.startedAt)}  •  {ride.points.length} points GPS</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={24} color="#34d12f" />
-          </Pressable>
-          <Pressable accessibilityLabel="Supprimer ce parcours" style={styles.rideDelete} onPress={() => deleteRide(ride)}>
-            <Ionicons name="trash-outline" size={22} color="#ff7777" />
-          </Pressable>
+  const stateLabel =
+    status === 'recording'
+      ? 'Enregistrement en cours'
+      : status === 'paused'
+      ? 'En pause'
+      : 'Prêt à rouler';
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.container}>
+        <ScreenBackButton />
+
+        <View style={styles.badge}>
+          <Ionicons name="navigate" size={15} color={wcTheme.colors.green} />
+          <Text style={styles.badgeText}>GPS • NIGHT RIDE</Text>
         </View>
-      ))}
-    </View>
-  </ScrollView></SafeAreaView>;
+
+        <Text style={styles.title}>Enregistrer un parcours</Text>
+        <Text style={styles.subtitle}>
+          Les points GPS sont conservés, mais la carte affiche une trace fluide et propre.
+        </Text>
+
+        <View style={styles.mapCard}>
+          <MapView
+            ref={mapRef}
+            style={StyleSheet.absoluteFill}
+            customMapStyle={MAP_DARK_STYLE}
+            mapType="standard"
+            showsUserLocation={status !== 'idle'}
+            showsMyLocationButton={false}
+            showsCompass={false}
+            showsScale={false}
+            showsBuildings={false}
+            toolbarEnabled={false}
+            initialRegion={{
+              latitude: 43.88,
+              longitude: 4.56,
+              latitudeDelta: 0.035,
+              longitudeDelta: 0.035,
+            }}
+          >
+            {displayTrack.length >= 2 ? (
+              <>
+                <Polyline
+                  coordinates={displayTrack}
+                  strokeColor="rgba(56,231,255,0.28)"
+                  strokeWidth={11}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+                <Polyline
+                  coordinates={displayTrack}
+                  strokeColor={wcTheme.colors.cyan}
+                  strokeWidth={5}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              </>
+            ) : null}
+
+            {firstCoordinate ? (
+              <Marker coordinate={firstCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={styles.startMarker}>
+                  <Ionicons name="flag" size={15} color={wcTheme.colors.bg} />
+                </View>
+              </Marker>
+            ) : null}
+
+            {latestCoordinate ? (
+              <Marker coordinate={latestCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={styles.currentMarker}>
+                  <View style={styles.currentMarkerInner} />
+                </View>
+              </Marker>
+            ) : null}
+          </MapView>
+
+          <View style={styles.mapTop}>
+            <View style={styles.mapPill}>
+              <View
+                style={[
+                  styles.statusDot,
+                  status === 'recording' && styles.statusDotOn,
+                  status === 'paused' && styles.statusDotPause,
+                ]}
+              />
+              <Text style={styles.mapPillText}>{stateLabel}</Text>
+            </View>
+
+            <View style={styles.mapPill}>
+              <Ionicons name="locate-outline" size={15} color={wcTheme.colors.cyan} />
+              <Text style={styles.mapPillText}>
+                {lastAccuracy == null ? 'GPS' : `± ${Math.round(lastAccuracy)} m`}
+              </Text>
+            </View>
+          </View>
+
+          {!latestCoordinate ? (
+            <View style={styles.mapEmpty}>
+              <View style={styles.mapEmptyIcon}>
+                <Ionicons name="navigate" size={31} color={wcTheme.colors.cyan} />
+              </View>
+              <Text style={styles.mapEmptyTitle}>Carte prête</Text>
+              <Text style={styles.mapEmptyText}>
+                Démarre pour voir ta position et ta trace apparaître en direct.
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={styles.mapBottom}>
+            <Text style={styles.gpsSignal}>{gpsMessage}</Text>
+          </View>
+        </View>
+
+        <View style={styles.stats}>
+          <View style={styles.stat}>
+            <Ionicons name="map-outline" size={20} color={wcTheme.colors.cyan} />
+            <Text style={styles.value}>{(distanceM / 1000).toFixed(2)}</Text>
+            <Text style={styles.label}>km</Text>
+          </View>
+
+          <View style={styles.stat}>
+            <Ionicons name="time-outline" size={20} color={wcTheme.colors.green} />
+            <Text style={styles.valueDuration}>{formatDuration(elapsed)}</Text>
+            <Text style={styles.label}>durée</Text>
+          </View>
+
+          <View style={styles.stat}>
+            <Ionicons name="speedometer-outline" size={20} color={wcTheme.colors.cyan} />
+            <Text style={styles.value}>{currentSpeed.toFixed(1)}</Text>
+            <Text style={styles.label}>km/h</Text>
+          </View>
+        </View>
+
+        {status === 'idle' ? (
+          <Pressable style={styles.primary} onPress={() => void start()}>
+            <View style={styles.primaryIcon}>
+              <Ionicons name="play" size={24} color={ACTION_CYAN} />
+            </View>
+            <Text style={styles.primaryText}>Démarrer le parcours</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.actions}>
+            {status === 'recording' ? (
+              <Pressable style={styles.secondary} onPress={pause}>
+                <Ionicons name="pause" size={22} color={ACTION_CYAN} />
+                <Text style={styles.secondaryText}>Pause</Text>
+              </Pressable>
+            ) : (
+              <Pressable style={styles.secondary} onPress={() => void resume()}>
+                <Ionicons name="play" size={22} color={ACTION_CYAN} />
+                <Text style={styles.secondaryText}>Reprendre</Text>
+              </Pressable>
+            )}
+
+            <Pressable style={styles.stop} onPress={() => void stop()}>
+              <Ionicons name="stop" size={22} color={ACTION_CYAN} />
+              <Text style={styles.secondaryText}>Terminer</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {status !== 'idle' ? (
+          <View style={styles.debugGlass}>
+            <Ionicons name="pulse-outline" size={18} color={wcTheme.colors.cyan} />
+            <Text style={styles.debugText}>
+              Précision : {lastAccuracy == null ? '—' : `${Math.round(lastAccuracy)} m`}
+              {'  •  '}Dernier déplacement : {lastStepM.toFixed(1)} m
+              {'  •  '}{points.length} point{points.length > 1 ? 's' : ''} conservé
+              {points.length > 1 ? 's' : ''}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={styles.note}>
+          <Ionicons name="shield-checkmark-outline" size={24} color={wcTheme.colors.green} />
+          <Text style={styles.noteText}>
+            Les points GPS bruts restent enregistrés pour préserver la précision du parcours
+            et permettre plus tard l’export GPX. Seul l’affichage de la trace est lissé.
+          </Text>
+        </View>
+
+        <View style={styles.history}>
+          <View style={styles.historyHeader}>
+            <View>
+              <Text style={styles.historyTitle}>Mes parcours</Text>
+              <Text style={styles.historySubtitle}>
+                {savedRides.length
+                  ? `${savedRides.length} parcours enregistré${savedRides.length > 1 ? 's' : ''} sur cet iPhone`
+                  : 'Aucun parcours enregistré pour le moment'}
+              </Text>
+            </View>
+            <Ionicons name="trail-sign-outline" size={25} color={wcTheme.colors.cyan} />
+          </View>
+
+          {savedRides.slice(0, 5).map((ride) => (
+            <View key={ride.id} style={styles.rideCard}>
+              <Pressable
+                style={styles.rideOpen}
+                onPress={() => {
+                  void AsyncStorage.setItem(SELECTED_RIDE_KEY, ride.id).then(() => {
+                    router.push({ pathname: '/parcours-detail', params: { id: ride.id } });
+                  });
+                }}
+              >
+                <View style={styles.rideIcon}>
+                  <Ionicons name="map-outline" size={23} color={wcTheme.colors.cyan} />
+                </View>
+
+                <View style={styles.rideMain}>
+                  <Text style={styles.rideDate}>
+                    {new Date(ride.startedAt).toLocaleDateString('fr-FR', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: 'numeric',
+                    })}
+                  </Text>
+                  <Text style={styles.rideMeta}>
+                    {(ride.distanceM / 1000).toFixed(2)} km • {formatDuration(ride.endedAt - ride.startedAt)}
+                  </Text>
+                  <Text style={styles.ridePoints}>{ride.points.length} points GPS conservés</Text>
+                </View>
+
+                <Ionicons name="chevron-forward" size={23} color={wcTheme.colors.green} />
+              </Pressable>
+
+              <Pressable
+                accessibilityLabel="Supprimer ce parcours"
+                style={styles.rideDelete}
+                onPress={() => deleteRide(ride)}
+              >
+                <Ionicons name="trash-outline" size={22} color={wcTheme.colors.danger} />
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
 }
 
-const styles=StyleSheet.create({safe:{flex:1,backgroundColor:'#071a23'},container:{padding:24,paddingBottom:120},versionBadge:{alignSelf:'flex-start',backgroundColor:'#34d12f',color:'#071a23',fontSize:13,fontWeight:'900',paddingHorizontal:12,paddingVertical:7,borderRadius:999,marginTop:18},title:{fontSize:38,fontWeight:'900',color:'#fff',marginTop:22},subtitle:{fontSize:18,lineHeight:25,color:'#aab6bd',marginTop:8,marginBottom:28},live:{alignItems:'center',backgroundColor:'#122936',borderRadius:28,padding:24},state:{color:'#fff',fontSize:22,fontWeight:'900',marginTop:8},gpsSignal:{color:'#8fe68b',fontSize:13,fontWeight:'800',marginTop:8,textAlign:'center'},gpsDebug:{color:'#91a6b0',fontSize:12,fontWeight:'700',marginTop:6,textAlign:'center'},stats:{flexDirection:'row',gap:10,marginVertical:18},stat:{flex:1,backgroundColor:'#fff',borderRadius:20,paddingVertical:18,paddingHorizontal:8,alignItems:'center',justifyContent:'center'},value:{fontSize:20,fontWeight:'900',color:'#071a23',textAlign:'center'},label:{fontSize:13,fontWeight:'800',color:'#687781',marginTop:4},primary:{backgroundColor:'#34d12f',borderRadius:22,padding:20,flexDirection:'row',gap:10,alignItems:'center',justifyContent:'center'},primaryText:{fontSize:22,fontWeight:'900',color:'#071a23'},actions:{flexDirection:'row',gap:12},secondary:{flex:1,backgroundColor:'#29424e',borderRadius:22,padding:18,flexDirection:'row',gap:8,alignItems:'center',justifyContent:'center'},stop:{flex:1,backgroundColor:'#a83232',borderRadius:22,padding:18,flexDirection:'row',gap:8,alignItems:'center',justifyContent:'center'},secondaryText:{fontSize:18,fontWeight:'900',color:'#fff'},note:{marginTop:24,backgroundColor:'#102c37',borderRadius:20,padding:18,flexDirection:'row',gap:12},noteText:{flex:1,color:'#c1cbd0',fontSize:15,lineHeight:22},history:{marginTop:24},historyTitle:{color:'#fff',fontSize:26,fontWeight:'900'},historySubtitle:{color:'#91a6b0',fontSize:14,fontWeight:'700',marginTop:5,marginBottom:12},rideCard:{backgroundColor:'#122936',borderRadius:18,marginBottom:10,flexDirection:'row',alignItems:'stretch',overflow:'hidden'},rideOpen:{flex:1,padding:14,flexDirection:'row',alignItems:'center',gap:12},rideDelete:{width:54,alignItems:'center',justifyContent:'center',borderLeftWidth:1,borderLeftColor:'#23414f'},rideIcon:{width:44,height:44,borderRadius:14,backgroundColor:'#0b202b',alignItems:'center',justifyContent:'center'},rideMain:{flex:1},rideDate:{color:'#fff',fontSize:16,fontWeight:'900'},rideMeta:{color:'#aab6bd',fontSize:13,fontWeight:'700',marginTop:4}});
+
+const ACTION_GLASS = {
+  backgroundColor: 'rgba(14, 43, 57, 0.68)',
+  borderWidth: 1.4,
+  borderColor: 'rgba(83, 213, 255, 0.82)',
+  shadowColor: '#20D9FF',
+  shadowOpacity: 0.18,
+  shadowRadius: 16,
+  shadowOffset: { width: 0, height: 6 },
+  elevation: 7,
+};
+
+const ACTION_GLASS_SELECTED = {
+  ...ACTION_GLASS,
+  backgroundColor: 'rgba(18, 58, 76, 0.92)',
+};
+
+const ACTION_TEXT = {
+  color: '#FFFFFF',
+  fontWeight: '900' as const,
+};
+
+const ACTION_CYAN = '#2FE8FF';
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: wcTheme.colors.bg },
+  container: { padding: 18, paddingBottom: 130 },
+
+  badge: {
+    alignSelf: 'flex-start',
+    marginTop: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: 'rgba(87,243,107,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(87,243,107,0.40)',
+  },
+  badgeText: { color: wcTheme.colors.green, fontSize: 12, fontWeight: '900', letterSpacing: 0.8 },
+
+  title: { color: wcTheme.colors.text, fontSize: 36, lineHeight: 41, fontWeight: '900', marginTop: 18 },
+  subtitle: { color: wcTheme.colors.textMuted, fontSize: 16, lineHeight: 23, marginTop: 8, marginBottom: 20 },
+
+  mapCard: {
+    height: 390,
+    borderRadius: 30,
+    overflow: 'hidden',
+    backgroundColor: wcTheme.colors.panelStrong,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+    ...wcTheme.shadow.glow,
+  },
+  mapTop: {
+    position: 'absolute',
+    top: 14,
+    left: 14,
+    right: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  mapPill: {
+    minHeight: 38,
+    borderRadius: 19,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: 'rgba(4,17,26,0.84)',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+  },
+  mapPillText: { color: wcTheme.colors.text, fontSize: 12, fontWeight: '900' },
+  statusDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: wcTheme.colors.textSoft },
+  statusDotOn: { backgroundColor: wcTheme.colors.green },
+  statusDotPause: { backgroundColor: wcTheme.colors.warning },
+
+  mapEmpty: {
+    position: 'absolute',
+    top: 120,
+    left: 28,
+    right: 28,
+    alignItems: 'center',
+    padding: 20,
+    borderRadius: 26,
+    backgroundColor: 'rgba(5,22,31,0.72)',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+  },
+  mapEmptyIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(56,231,255,0.12)',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.cyan,
+  },
+  mapEmptyTitle: { color: wcTheme.colors.text, fontSize: 20, fontWeight: '900', marginTop: 12 },
+  mapEmptyText: { color: wcTheme.colors.textMuted, fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 6 },
+
+  mapBottom: { position: 'absolute', bottom: 14, left: 14, right: 14, alignItems: 'center' },
+  gpsSignal: {
+    color: wcTheme.colors.greenSoft,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(4,17,26,0.84)',
+    borderWidth: 1,
+    borderColor: 'rgba(87,243,107,0.25)',
+  },
+
+  startMarker: {
+    width: 34, height: 34, borderRadius: 17,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: wcTheme.colors.green,
+    borderWidth: 3, borderColor: 'rgba(255,255,255,0.86)',
+  },
+  currentMarker: {
+    width: 34, height: 34, borderRadius: 17,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(56,231,255,0.20)',
+    borderWidth: 2, borderColor: wcTheme.colors.cyan,
+  },
+  currentMarkerInner: {
+    width: 12, height: 12, borderRadius: 6,
+    backgroundColor: wcTheme.colors.cyan,
+  },
+
+  stats: { flexDirection: 'row', gap: 10, marginVertical: 16 },
+  stat: {
+    flex: 1,
+    minHeight: 118,
+    borderRadius: 24,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+    ...wcTheme.shadow.soft,
+  },
+  value: { color: wcTheme.colors.text, fontSize: 25, fontWeight: '900', textAlign: 'center', marginTop: 5 },
+  valueDuration: { color: wcTheme.colors.text, fontSize: 17, lineHeight: 20, fontWeight: '900', textAlign: 'center', marginTop: 7 },
+  label: { color: wcTheme.colors.textMuted, fontSize: 12, fontWeight: '800', marginTop: 3 },
+
+  primary: {
+    minHeight: 64,
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 11,
+    ...wcTheme.shadow.greenGlow,
+    ...ACTION_GLASS,
+  },
+  primaryIcon: {
+    width: 38, height: 38, borderRadius: 19,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: wcTheme.colors.green,
+  },
+  primaryText: { fontSize: 19,
+    ...ACTION_TEXT, },
+
+  actions: { flexDirection: 'row', gap: 12 },
+  secondary: {
+    flex: 1,
+    minHeight: 60,
+    borderRadius: 22,
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...ACTION_GLASS,
+  },
+  stop: {
+    flex: 1,
+    minHeight: 60,
+    borderRadius: 22,
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...ACTION_GLASS,
+  },
+  secondaryText: { fontSize: 16,
+    ...ACTION_TEXT, },
+
+  debugGlass: {
+    marginTop: 14,
+    borderRadius: 18,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: wcTheme.colors.panelSoft,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+  },
+  debugText: { flex: 1, color: wcTheme.colors.textSoft, fontSize: 11, lineHeight: 16, fontWeight: '700' },
+
+  note: {
+    marginTop: 20,
+    borderRadius: 24,
+    padding: 16,
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+  },
+  noteText: { flex: 1, color: wcTheme.colors.textMuted, fontSize: 13, lineHeight: 20 },
+
+  history: { marginTop: 26 },
+  historyHeader: { marginBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  historyTitle: { color: wcTheme.colors.text, fontSize: 25, fontWeight: '900' },
+  historySubtitle: { color: wcTheme.colors.textMuted, fontSize: 13, fontWeight: '700', marginTop: 5 },
+
+  rideCard: {
+    marginBottom: 11,
+    borderRadius: 20,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+  },
+  rideOpen: { flex: 1, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  rideDelete: {
+    width: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: 1,
+    ...ACTION_GLASS,
+    backgroundColor: 'rgba(255, 68, 84, 0.10)',
+    borderColor: 'rgba(255, 68, 84, 0.58)',
+    borderLeftColor: 'rgba(255, 68, 84, 0.78)',
+  },
+  rideIcon: {
+    width: 44, height: 44, borderRadius: 15,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(56,231,255,0.10)',
+    borderWidth: 1, borderColor: 'rgba(56,231,255,0.22)',
+  },
+  rideMain: { flex: 1 },
+  rideDate: { color: wcTheme.colors.text, fontSize: 15, fontWeight: '900' },
+  rideMeta: { color: wcTheme.colors.textMuted, fontSize: 12, fontWeight: '700', marginTop: 4 },
+  ridePoints: { color: wcTheme.colors.textSoft, fontSize: 11, fontWeight: '700', marginTop: 3 },
+});

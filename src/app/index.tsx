@@ -1,52 +1,78 @@
-import { router } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useMemo, useState } from 'react';
 import {
+  Image,
   Keyboard,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ScreenBackButton } from '../components/screen-back-button';
 import { useAuth } from '../auth/auth-provider';
-import { t } from '../i18n/i18n';
+
 import { listCommunityRides, type CommunityRide } from '../data/community-rides';
-import { listMembers, type MemberDirectoryEntry } from '../data/community-messages';
 import { rideDate } from '../data/models';
-import { useInfoSheet } from '../hooks/use-info-sheet';
+import { t } from '../i18n/i18n';
+import { getSupabase } from '../lib/supabase';
+import { wcTheme } from '../theme/wheelers-theme';
 
 export default function HomeScreen() {
-  const scrollRef = useRef<ScrollView>(null);
-  const [query, setQuery] = useState('');
   const [rides, setRides] = useState<CommunityRide[]>([]);
-  const [members, setMembers] = useState<MemberDirectoryEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [onlineCount, setOnlineCount] = useState(0);
   const { session } = useAuth();
-  const { showInfo, infoSheet } = useInfoSheet();
   const userId = session?.user.id ?? '';
 
-  async function refreshHome() {
-    if (!userId) { setRides([]); setMembers([]); return; }
-    setLoading(true);
+  const refreshHome = useCallback(async () => {
+    if (!userId) {
+      setRides([]);
+      setOnlineCount(0);
+      return;
+    }
+
+
     try {
-      const [rideRows, memberRows] = await Promise.all([listCommunityRides(userId), listMembers()]);
+      // Un utilisateur est considéré en ligne si son heartbeat date de moins de 90 secondes.
+      // Cela couvre aussi le cas où l'app est fermée brutalement sans pouvoir supprimer sa présence.
+      const presenceCutoff = new Date(Date.now() - 90000).toISOString();
+
+      const [rideRows, presenceResult] = await Promise.all([
+        listCommunityRides(userId),
+        getSupabase()
+          .from('user_presence')
+          .select('user_id')
+          .gte('updated_at', presenceCutoff),
+      ]);
+
+      if (presenceResult.error) throw presenceResult.error;
+
       setRides(rideRows);
-      setMembers(memberRows);
+      setOnlineCount(presenceResult.data?.length ?? 0);
     } catch {
       // L'accueil reste utilisable même si le réseau est momentanément indisponible.
-    } finally { setLoading(false); }
-  }
+    } finally {
+      // Rien à faire : l'accueil conserve les dernières données valides.
+    }
+  }, [userId]);
 
-  useEffect(() => { void refreshHome(); }, [userId]);
+  useFocusEffect(
+    useCallback(() => {
+      void refreshHome();
 
-  const nextRide = useMemo(() => rides
-    .map(ride => ({ ride, when: rideDate(ride.date, ride.time) }))
-    .filter(item => item.when && item.when.getTime() >= Date.now())
-    .sort((a, b) => a.when!.getTime() - b.when!.getTime())[0]?.ride ?? null, [rides]);
+      const interval = setInterval(() => {
+        void refreshHome();
+      }, 15000);
+
+      return () => clearInterval(interval);
+    }, [refreshHome])
+  );
+
+  const upcomingRideCount = useMemo(() => rides.reduce((count, ride) => {
+    const when = rideDate(ride.date, ride.time);
+    return when && when.getTime() >= Date.now() ? count + 1 : count;
+  }, 0), [rides]);
 
   function navigate(path: '/explore' | '/sorties' | '/profil' | '/messages') {
     Keyboard.dismiss();
@@ -56,15 +82,16 @@ export default function HomeScreen() {
   return (
     <>
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.container}>
-        <ScreenBackButton />
+      <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.container}>
+
 
         <View style={styles.header}>
-          <View>
+          <View style={styles.brandGlass}>
             <Text style={styles.logoWhite}>Wheelers</Text>
             <Text style={styles.logoGreen}>Connect</Text>
-            <Text style={styles.slogan}>{t('homeSlogan')}</Text>
           </View>
+
+          <Text style={styles.slogan}>{t('homeSlogan')}</Text>
 
           <Pressable
             style={styles.notification}
@@ -78,152 +105,71 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
-        <View style={styles.searchBox}>
-          <Text style={styles.searchIcon}>⌕</Text>
-
-          <TextInput
-            accessibilityLabel={t('searchAccessibilityHome')}
-            value={query}
-            onChangeText={setQuery}
-            returnKeyType="search"
-            onSubmitEditing={() => { Keyboard.dismiss(); router.navigate({ pathname: '/search', params: { q: query.trim() } }); }}
-            placeholder={t('searchPlaceholder')}
-            placeholderTextColor="#8794A1"
-            style={styles.searchInput}
-          />
-        </View>
-
-        <View style={styles.filters}>
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={[styles.filter, styles.filterActive]}
-            onPress={() => {
-              Keyboard.dismiss();
-              setQuery('');
-              void refreshHome();
-              scrollRef.current?.scrollTo({ y: 0, animated: true });
-            }}
-          >
-            <Text style={styles.filterActiveText}>{t('all')}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={styles.filter}
-            onPress={() => navigate('/sorties')}
-          >
-            <Text style={styles.filterText}>{t('rides')}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={styles.filter}
-            onPress={() => showInfo(
-              t('routes'),
-              t('routesUnavailableInfo')
-            )}
-          >
-            <Text style={styles.filterText}>{t('routes')}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={styles.filter}
-            onPress={() => navigate('/explore')}
-          >
-            <Text style={styles.filterText}>{t('members')}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={styles.filter}
-            onPress={() => navigate('/explore')}
-          >
-            <Text style={styles.filterText}>{t('places')}</Text>
-          </TouchableOpacity>
-        </View>
-
         <Pressable
           style={styles.map}
           accessibilityRole="button"
           accessibilityLabel={t('seeMembers')}
           onPress={() => navigate('/explore')}
         >
-          <Text style={styles.mapTitle}>{t('communityWheelersConnect')}</Text>
-          <Text style={styles.communityNumber}>
-            {userId ? members.length : '—'}
-          </Text>
-          <Text style={styles.communityText}>
-            {userId
-              ? (members.length > 1 ? t('otherWheelersVisiblePlural') : t('otherWheelerVisibleSingle'))
-              : t('communityLoginShort')}
-          </Text>
-          <Text style={styles.communityLink}>{t('seeMembers')} ›</Text>
-        </Pressable>
-
-        <Text style={styles.sectionTitle}>{t('nextRide')}</Text>
-
-        {nextRide ? (
-          <Pressable
-            style={styles.rideCard}
-            accessibilityRole="button"
-            accessibilityLabel={`${t('viewRideLabel')} ${nextRide.title}`}
-            onPress={() => navigate('/sorties')}
-          >
-            <View style={styles.rideDate}>
-              <Text style={styles.rideDay}>{nextRide.date.slice(0, 2)}</Text>
-              <Text style={styles.rideMonth}>
-                {nextRide.date.slice(3, 5)}/{nextRide.date.slice(8, 10)}
-              </Text>
-            </View>
-
-            <View style={styles.rideInfo}>
-              <Text style={styles.rideTitle}>{nextRide.title}</Text>
-              <Text style={styles.rideText}>📍 {nextRide.departure}</Text>
-              <Text style={styles.rideText}>
-                🕙 {nextRide.time} · {nextRide.participantCount}/{nextRide.maxParticipants}
-              </Text>
-            </View>
-
-            <View style={styles.joinButton}>
-              <Text style={styles.joinText}>{t('view')}</Text>
-            </View>
-          </Pressable>
-        ) : (
-          <Pressable
-            style={styles.rideCard}
-            accessibilityRole="button"
-            onPress={() => navigate('/sorties')}
-          >
-            <View style={styles.rideInfo}>
-              <Text style={styles.rideTitle}>
-                {loading ? t('loading') : t('noUpcomingPublishedRide')}
-              </Text>
-              <Text style={styles.rideText}>
-                {t('tapToBrowseOrCreateRide')}
-              </Text>
-            </View>
-          </Pressable>
-        )}
-
-        <View style={styles.supportCard}>
-          <View style={styles.supportTextBlock}>
-            <Text style={styles.supportTitle}>🛞 {t('wheelSupportName')}</Text>
-            <Text style={styles.supportText}>
-              {t('supportText')}
-            </Text>
+          <View style={styles.mapTopRow}>
+            <Image
+              source={require('../../assets/images/wheelers-connect-logo.png')}
+              style={styles.mapLogo}
+              resizeMode="cover"
+            />
+            <Text style={styles.mapTitle}>Ils sont connectés</Text>
           </View>
 
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={styles.supportButton}
-            onPress={() => showInfo(
-              t('wheelSupportName'),
-              t('supportUnavailableInfo')
-            )}
+          <View style={styles.communityCountRow}>
+            <Text style={styles.communityNumber}>
+              {userId ? onlineCount : '—'}
+            </Text>
+            <View style={styles.communityCopy}>
+              <Text style={styles.communityText}>
+                {userId
+                  ? (onlineCount > 1 ? 'membres connectés' : 'membre connecté')
+                  : t('communityLoginShort')}
+              </Text>
+              <Text style={styles.communityLink}>{t('seeMembers')} ›</Text>
+            </View>
+          </View>
+        </Pressable>
+
+        <View style={styles.featureRow}>
+          <View style={[styles.featureCard, styles.rideFeatureCard]}>
+            <Text style={[styles.featureEyebrow, styles.rideFeatureEyebrow]}>SORTIE(S)</Text>
+
+            <View style={styles.rideCountBody}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Voir les sorties programmées : ${upcomingRideCount}`}
+                onPress={() => navigate('/sorties')}
+                style={({ pressed }) => [
+                  styles.rideCountButton,
+                  pressed && styles.rideCountButtonPressed,
+                ]}
+              >
+                <Text style={styles.rideCountNumber}>{upcomingRideCount}</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <Pressable
+            style={[styles.featureCard, styles.creatorFeatureCard]}
+            accessibilityRole="link"
+            accessibilityLabel="Ouvrir la chaîne YouTube Happy Wheels"
+            onPress={() => void Linking.openURL('https://www.youtube.com/@HappyWheels-euc')}
           >
-            <Text style={styles.supportButtonText}>{t('support')}</Text>
-          </TouchableOpacity>
+            <Text style={[styles.featureEyebrow, styles.creatorFeatureEyebrow]}>À DÉCOUVRIR</Text>
+
+            <View style={styles.creatorFeatureBody}>
+              <View style={styles.youtubeMark}>
+                <Text style={styles.youtubePlay}>▶</Text>
+              </View>
+            </View>
+
+            <Text numberOfLines={1} style={styles.creatorFeatureTitle}>Happy Wheels</Text>
+          </Pressable>
         </View>
 
         <View style={styles.adSpace}>
@@ -239,7 +185,6 @@ export default function HomeScreen() {
       </ScrollView>
     </SafeAreaView>
 
-    {infoSheet}
     </>
   );
 }
@@ -247,57 +192,81 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#0D1923',
+    backgroundColor: wcTheme.colors.bg,
   },
 
   container: {
-    padding: 18,
-    paddingBottom: 40,
+    padding: 16,
+    paddingBottom: 110,
   },
 
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 22,
+    position: 'relative',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingTop: 6,
+  },
+
+  brandGlass: {
+    minWidth: 250,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 28,
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+    ...wcTheme.shadow.glow,
   },
 
   logoWhite: {
-    color: '#FFFFFF',
-    fontSize: 40,
+    color: wcTheme.colors.text,
+    fontSize: 30,
     fontWeight: '900',
     fontStyle: 'italic',
-    lineHeight: 40,
+    lineHeight: 31,
   },
 
   logoGreen: {
-    color: '#42D435',
-    fontSize: 40,
+    color: wcTheme.colors.green,
+    fontSize: 30,
     fontWeight: '900',
     fontStyle: 'italic',
-    lineHeight: 42,
+    lineHeight: 32,
   },
 
   slogan: {
-    color: '#C8D1D8',
-    fontSize: 16,
-    marginTop: 7,
+    color: wcTheme.colors.textMuted,
+    fontSize: 15,
+    marginTop: 12,
+    textAlign: 'center',
   },
 
   notification: {
-    position: 'relative',
-    marginTop: 5,
+    position: 'absolute',
+    right: 0,
+    top: 3,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+    ...wcTheme.shadow.glow,
   },
 
   notificationIcon: {
-    fontSize: 29,
+    fontSize: 22,
   },
 
   badge: {
     position: 'absolute',
     right: -5,
     top: -5,
-    backgroundColor: '#FF3B30',
+    backgroundColor: wcTheme.colors.danger,
     width: 20,
     height: 20,
     borderRadius: 10,
@@ -306,82 +275,105 @@ const styles = StyleSheet.create({
   },
 
   badgeText: {
-    color: '#FFFFFF',
+    color: wcTheme.colors.text,
     fontSize: 11,
     fontWeight: '800',
   },
 
   searchBox: {
-    height: 54,
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
+    minHeight: 54,
+    marginTop: 16,
+    borderRadius: 22,
+    backgroundColor: wcTheme.colors.glass,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
+    ...wcTheme.shadow.soft,
   },
 
   searchIcon: {
-    fontSize: 27,
-    color: '#263746',
-    marginRight: 9,
+    fontSize: 28,
+    color: wcTheme.colors.cyan,
+    marginRight: 10,
   },
 
   searchInput: {
     flex: 1,
     fontSize: 15,
-    color: '#17232D',
+    color: wcTheme.colors.text,
+    paddingVertical: 12,
   },
 
   filters: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    justifyContent: 'center',
     gap: 9,
-    paddingVertical: 16,
-    paddingRight: 4,
+    paddingTop: 18,
+    paddingBottom: 8,
+    paddingHorizontal: 4,
   },
 
   filter: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 15,
     height: 38,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+    borderRadius: 19,
+    backgroundColor: wcTheme.colors.panelSoft,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
     justifyContent: 'center',
   },
 
   filterActive: {
-    backgroundColor: '#31BF38',
+    backgroundColor: 'rgba(87, 243, 107, 0.16)',
+    borderColor: wcTheme.colors.green,
+    ...wcTheme.shadow.greenGlow,
   },
 
   filterText: {
-    color: '#1F2933',
-    fontWeight: '700',
+    color: wcTheme.colors.textMuted,
+    fontWeight: '800',
   },
 
   filterActiveText: {
-    color: '#FFFFFF',
-    fontWeight: '800',
+    color: wcTheme.colors.green,
+    fontWeight: '900',
   },
 
   map: {
-    height: 310,
-    backgroundColor: '#DDEFCF',
-    borderRadius: 26,
+    minHeight: 150,
+    marginTop: 0,
+    backgroundColor: wcTheme.colors.glassStrong,
+    borderRadius: 28,
     overflow: 'hidden',
-    position: 'relative',
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+    padding: 16,
+    ...wcTheme.shadow.glow,
+  },
+
+  mapTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  mapLogo: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
   },
 
   mapTitle: {
-    position: 'absolute',
-    top: 18,
-    alignSelf: 'center',
-    backgroundColor: '#FFFFFFEE',
-    paddingHorizontal: 15,
-    paddingVertical: 7,
-    borderRadius: 15,
-    fontWeight: '800',
-    color: '#17232D',
+    flex: 1,
+    color: wcTheme.colors.text,
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
   },
 
   marker: {
@@ -389,11 +381,11 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: wcTheme.colors.glassStrong,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: '#34C63B',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.green,
   },
 
   markerEmoji: {
@@ -404,7 +396,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 185,
     left: 105,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: wcTheme.colors.glassStrong,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 18,
@@ -413,82 +405,97 @@ const styles = StyleSheet.create({
   },
 
   youDot: {
-    color: '#1677FF',
+    color: wcTheme.colors.cyan,
     fontSize: 24,
     marginRight: 5,
   },
 
   youText: {
     fontWeight: '800',
-    color: '#16232D',
+    color: wcTheme.colors.text,
   },
 
   city: {
     position: 'absolute',
-    color: '#33474F',
+    color: wcTheme.colors.textMuted,
     fontWeight: '800',
     fontSize: 15,
   },
 
+  communityCountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+
   communityNumber: {
-    color: '#17232D',
-    fontSize: 54,
+    color: wcTheme.colors.text,
+    fontSize: 48,
+    lineHeight: 52,
     fontWeight: '900',
-    textAlign: 'center',
-    marginTop: 28,
+    minWidth: 66,
+  },
+
+  communityCopy: {
+    flex: 1,
+    paddingLeft: 8,
   },
 
   communityText: {
-    color: '#42515D',
-    fontSize: 18,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginTop: 4,
+    color: wcTheme.colors.cyanSoft,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '800',
   },
 
   communityLink: {
-    color: '#24A92F',
-    fontSize: 18,
+    color: wcTheme.colors.green,
+    fontSize: 15,
     fontWeight: '900',
-    textAlign: 'center',
-    marginTop: 24,
+    marginTop: 10,
   },
 
   sectionTitle: {
-    color: '#FFFFFF',
-    fontSize: 23,
-    fontWeight: '800',
-    marginTop: 25,
+    color: wcTheme.colors.text,
+    fontSize: 22,
+    fontWeight: '900',
+    marginTop: 20,
     marginBottom: 12,
+    textAlign: 'center',
   },
 
   rideCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 22,
+    backgroundColor: wcTheme.colors.glass,
+    borderRadius: 24,
     padding: 15,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+    ...wcTheme.shadow.soft,
   },
 
   rideDate: {
-    backgroundColor: '#ECF8EB',
-    width: 62,
-    height: 70,
-    borderRadius: 16,
+    backgroundColor: 'rgba(87, 243, 107, 0.13)',
+    borderWidth: 1,
+    borderColor: 'rgba(87, 243, 107, 0.40)',
+    width: 58,
+    height: 64,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
   rideDay: {
-    color: '#2EBB39',
-    fontSize: 26,
+    color: wcTheme.colors.green,
+    fontSize: 23,
     fontWeight: '900',
   },
 
   rideMonth: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#5D6A73',
+    color: wcTheme.colors.textMuted,
   },
 
   rideInfo: {
@@ -497,97 +504,174 @@ const styles = StyleSheet.create({
   },
 
   rideTitle: {
-    color: '#15212C',
-    fontSize: 17,
+    color: wcTheme.colors.text,
+    fontSize: 16,
     fontWeight: '900',
     marginBottom: 5,
   },
 
   rideText: {
-    color: '#53606A',
+    color: wcTheme.colors.textMuted,
     fontSize: 13,
+    lineHeight: 18,
     marginTop: 2,
   },
 
   joinButton: {
-    backgroundColor: '#31C33A',
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
+    backgroundColor: 'rgba(87, 243, 107, 0.16)',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.green,
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
 
   joinText: {
-    color: '#FFFFFF',
+    color: wcTheme.colors.green,
     fontWeight: '900',
   },
 
-  supportCard: {
-    marginTop: 18,
-    backgroundColor: '#182A37',
-    borderRadius: 22,
-    padding: 17,
+  featureRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2D4656',
+    gap: 12,
+    marginTop: 16,
+    alignItems: 'stretch',
   },
 
-  supportTextBlock: {
+  featureCard: {
     flex: 1,
-    paddingRight: 8,
+    minHeight: 150,
+    borderRadius: 22,
+    padding: 13,
+    borderWidth: 1.2,
+    borderColor: 'rgba(83, 213, 255, 0.72)',
+    backgroundColor: 'rgba(14, 43, 57, 0.76)',
+    shadowColor: '#20D9FF',
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
   },
 
-  supportTitle: {
-    color: '#FFFFFF',
+  rideFeatureCard: {
+    justifyContent: 'space-between',
+  },
+
+  creatorFeatureCard: {
+    justifyContent: 'space-between',
+  },
+
+  featureEyebrow: {
+    color: wcTheme.colors.cyanSoft,
+    fontSize: 9,
+    lineHeight: 12,
     fontWeight: '900',
-    fontSize: 18,
-    marginBottom: 5,
+    letterSpacing: 0.65,
   },
 
-  supportText: {
-    color: '#ADBBC5',
-    lineHeight: 18,
-    fontSize: 13,
+  rideFeatureEyebrow: {
+    width: '100%',
+    textAlign: 'center',
   },
 
-  supportButton: {
-    backgroundColor: '#31C33A',
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: 16,
+  rideCountBody: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  supportButtonText: {
-    color: '#FFFFFF',
+  rideCountButton: {
+    minWidth: 86,
+    minHeight: 86,
+    borderRadius: 43,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(87, 243, 107, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(87, 243, 107, 0.46)',
+  },
+
+  rideCountButtonPressed: {
+    opacity: 0.7,
+    transform: [{ scale: 0.96 }],
+  },
+
+  rideCountNumber: {
+    color: wcTheme.colors.green,
+    fontSize: 54,
+    lineHeight: 60,
     fontWeight: '900',
+    textAlign: 'center',
+  },
+
+  creatorFeatureBody: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 4,
+  },
+
+  creatorFeatureEyebrow: {
+    width: '100%',
+    textAlign: 'center',
+  },
+
+  youtubeMark: {
+    width: 48,
+    height: 42,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FF0000',
+    shadowColor: '#FF0000',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 5,
+  },
+
+  youtubePlay: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '900',
+    marginLeft: 2,
+  },
+
+  creatorFeatureTitle: {
+    color: wcTheme.colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+    textAlign: 'center',
   },
 
   adSpace: {
     marginTop: 18,
-    borderRadius: 18,
+    borderRadius: 22,
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: '#637787',
+    borderColor: wcTheme.colors.border,
+    backgroundColor: wcTheme.colors.panelSoft,
     padding: 17,
     alignItems: 'center',
   },
 
   adLabel: {
-    color: '#4BD448',
+    color: wcTheme.colors.green,
     fontWeight: '900',
     fontSize: 12,
     letterSpacing: 1.5,
   },
 
   adText: {
-    color: '#AAB8C2',
+    color: wcTheme.colors.textMuted,
     marginTop: 5,
     fontSize: 13,
+    textAlign: 'center',
   },
 
   footer: {
     textAlign: 'center',
-    color: '#728391',
+    color: wcTheme.colors.textSoft,
     fontSize: 10,
     marginTop: 25,
     letterSpacing: 1,

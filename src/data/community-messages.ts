@@ -1,10 +1,17 @@
 import { getSupabase } from '../lib/supabase';
+import type { Wheel } from './models';
 
 export type MemberDirectoryEntry = {
   userId: string;
   displayName: string;
   username: string;
   location: string;
+  age: string;
+  practiceYears: string;
+  level: string;
+  bio: string;
+  avatarUrl: string;
+  wheels: Record<string, Wheel>;
 };
 
 export type DirectMessage = {
@@ -15,15 +22,27 @@ export type DirectMessage = {
   createdAt: string;
 };
 
-export async function listMembers(): Promise<MemberDirectoryEntry[]> {
+export async function listMembers(includeSelf = false): Promise<MemberDirectoryEntry[]> {
   const db = getSupabase();
-  const { data, error } = await db.rpc('list_message_members');
+  const [{ data, error }, { data: sessionData }] = await Promise.all([
+    db.rpc('list_message_members'),
+    db.auth.getSession(),
+  ]);
   if (error) throw error;
-  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+  const currentUserId = sessionData.session?.user.id ?? '';
+  const rows = ((data ?? []) as Array<Record<string, unknown>>)
+    .filter((row) => includeSelf || String(row.user_id ?? '') !== currentUserId);
+  return rows.map((row) => ({
     userId: String(row.user_id ?? ''),
     displayName: String(row.display_name ?? ''),
     username: String(row.username ?? ''),
     location: String(row.location ?? ''),
+    age: String(row.age ?? ''),
+    practiceYears: String(row.practice_years ?? ''),
+    level: String(row.level ?? ''),
+    bio: String(row.bio ?? ''),
+    avatarUrl: String(row.avatar_url ?? ''),
+    wheels: row.wheels && typeof row.wheels === 'object' ? row.wheels as Record<string, Wheel> : {},
   }));
 }
 

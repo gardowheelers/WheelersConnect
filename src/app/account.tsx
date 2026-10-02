@@ -5,7 +5,7 @@ import { useAuth } from '../auth/auth-provider';
 import { ScreenBackButton } from '../components/screen-back-button';
 import { isCurrentUserAdmin } from '../data/admin';
 import { importLegacyData } from '../data/local-store';
-import { SyncConflictError, syncAccount } from '../data/remote-store';
+import { forceUploadLocal, SyncConflictError, syncAccount } from '../data/remote-store';
 import { t } from '../i18n/i18n';
 import { getSupabase, getSupabaseConfigurationError } from '../lib/supabase';
 
@@ -17,6 +17,7 @@ export default function AccountScreen() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [syncConflict, setSyncConflict] = useState(false);
   const configError = getSupabaseConfigurationError();
 
   useEffect(() => {
@@ -101,13 +102,42 @@ const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.htm
     await run(async () => { await importLegacyData(owner); refreshData(); return t('localDataAttached'); });
   }
   async function synchronize(download = false) {
-    await run(async () => {
-      try { const result = await syncAccount(owner, download); refreshData(); return result; }
-      catch (error) {
-        if (error instanceof SyncConflictError) throw error;
-        throw error;
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      const result = await syncAccount(owner, download);
+      setSyncConflict(false);
+      refreshData();
+      setMessage(result);
+    } catch (error) {
+      if (error instanceof SyncConflictError && !download) {
+        setSyncConflict(true);
+        setMessage('Deux versions différentes existent. Votre copie locale est conservée. Si cet iPhone contient la bonne version, utilisez le bouton ci-dessous pour remplacer le cloud.');
+      } else {
+        setMessage(error instanceof Error ? error.message : t('genericRetryError'));
       }
-    });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function keepThisPhoneAsReference() {
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      const result = await forceUploadLocal(owner);
+      setSyncConflict(false);
+      refreshData();
+      setMessage(result);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t('genericRetryError'));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return <KeyboardAvoidingView style={styles.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -132,6 +162,11 @@ const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.htm
         <Text style={styles.small}>{t('localDataStayDevice')}</Text>
         <Pressable disabled={busy} style={[styles.button, busy && styles.disabled]} onPress={importLocal}><Text style={styles.buttonText}>{t('importData')}</Text></Pressable>
         <Pressable disabled={busy} style={[styles.button, styles.secondary, busy && styles.disabled]} onPress={() => synchronize(false)}><Text style={styles.buttonText}>{t('syncCloud')}</Text></Pressable>
+        {syncConflict && (
+          <Pressable disabled={busy} style={[styles.button, styles.localWins, busy && styles.disabled]} onPress={keepThisPhoneAsReference}>
+            <Text style={styles.buttonText}>Garder cet iPhone et remplacer le cloud</Text>
+          </Pressable>
+        )}
         <Pressable disabled={busy} style={[styles.button, styles.caution, busy && styles.disabled]} onPress={() => synchronize(true)}><Text style={styles.buttonText}>{t('restoreCloud')}</Text></Pressable>
         <Pressable disabled={busy} style={[styles.button, styles.logout, busy && styles.disabled]} onPress={() => run(async () => { await signOut(); return t('signedOut'); })}><Text style={styles.buttonText}>{t('signOut')}</Text></Pressable>
         <Pressable disabled={busy} style={[styles.button, styles.delete, busy && styles.disabled]} onPress={deleteAccount}><Text style={styles.buttonText}>{t('deleteAccount')}</Text></Pressable>
@@ -145,13 +180,192 @@ const redirectTo = 'https://gardowheelers.fr/reset-password-wheelers-connect.htm
   </KeyboardAvoidingView>;
 }
 
+
+const ACTION_GLASS = {
+  backgroundColor: 'rgba(14, 43, 57, 0.68)',
+  borderWidth: 1.4,
+  borderColor: 'rgba(83, 213, 255, 0.82)',
+  shadowColor: '#20D9FF',
+  shadowOpacity: 0.18,
+  shadowRadius: 16,
+  shadowOffset: { width: 0, height: 6 },
+  elevation: 7,
+};
+
+const ACTION_GLASS_SELECTED = {
+  ...ACTION_GLASS,
+  backgroundColor: 'rgba(18, 58, 76, 0.92)',
+};
+
+const ACTION_TEXT = {
+  color: '#FFFFFF',
+  fontWeight: '900' as const,
+};
+
+const ACTION_CYAN = '#2FE8FF';
+
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: '#0D1923' }, content: { padding: 20, paddingTop: 58, paddingBottom: 120 },
-  title: { color: '#FFFFFF', fontSize: 30, fontWeight: '900', marginTop: 12 }, subtitle: { color: '#9EACB7', fontSize: 15, lineHeight: 22, marginTop: 6, marginBottom: 20 },
-  card: { backgroundColor: '#152633', borderWidth: 1, borderColor: '#263A48', borderRadius: 22, padding: 18, gap: 12, marginBottom: 16 },
-  section: { color: '#FFFFFF', fontSize: 19, fontWeight: '900' }, email: { color: '#32C93B', fontSize: 16, fontWeight: '800' },
-  input: { backgroundColor: '#0D1923', borderColor: '#304554', borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13, color: '#FFFFFF', fontSize: 16 },
-  button: { backgroundColor: '#32C93B', borderRadius: 15, minHeight: 50, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 }, secondary: { backgroundColor: '#245D78' }, caution: { backgroundColor: '#6C5A24' }, logout: { backgroundColor: '#75353A' }, delete: { backgroundColor: '#8B2229' }, disabled: { opacity: 0.45 },
-  forgotButton: { minHeight: 36, alignItems: 'center', justifyContent: 'center' }, forgotText: { color: '#74D9FF', fontSize: 14, fontWeight: '800', textDecorationLine: 'underline' },
-  buttonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', textAlign: 'center' }, warning: { color: '#FFD36A', fontSize: 15, fontWeight: '800' }, small: { color: '#A8B4BD', fontSize: 13, lineHeight: 19 }, message: { color: '#FFFFFF', backgroundColor: '#203746', padding: 14, borderRadius: 14, lineHeight: 20 },
+  page: {
+    flex: 1,
+    backgroundColor: '#071A24',
+  },
+
+  content: {
+    padding: 20,
+    paddingTop: 58,
+    paddingBottom: 120,
+  },
+
+  title: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    fontWeight: '900',
+    marginTop: 12,
+    textShadowColor: 'rgba(61, 213, 255, 0.18)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 10,
+  },
+
+  subtitle: {
+    color: '#AAB9C5',
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 6,
+    marginBottom: 20,
+  },
+
+  card: {
+    backgroundColor: 'rgba(16, 43, 58, 0.72)',
+    borderWidth: 1.25,
+    borderColor: 'rgba(88, 205, 255, 0.38)',
+    borderRadius: 24,
+    padding: 18,
+    gap: 12,
+    marginBottom: 16,
+    shadowColor: '#24C8FF',
+    shadowOpacity: 0.18,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 7,
+  },
+
+  section: {
+    color: '#FFFFFF',
+    fontSize: 19,
+    fontWeight: '900',
+  },
+
+  email: {
+    color: '#45F05A',
+    fontSize: 16,
+    fontWeight: '900',
+    textShadowColor: 'rgba(69, 240, 90, 0.22)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
+  },
+
+  input: {
+    backgroundColor: 'rgba(5, 24, 34, 0.62)',
+    borderColor: 'rgba(89, 210, 255, 0.38)',
+    borderWidth: 1.2,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    color: '#FFFFFF',
+    fontSize: 16,
+    shadowColor: '#24C8FF',
+    shadowOpacity: 0.10,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 3,
+  },
+
+  button: {
+    borderRadius: 17,
+    minHeight: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    ...ACTION_GLASS,
+  },
+
+  secondary: {
+    ...ACTION_GLASS,
+  },
+
+  caution: {
+    ...ACTION_GLASS,
+  },
+
+  logout: {
+    ...ACTION_GLASS,
+  },
+
+  delete: {
+    ...ACTION_GLASS,
+  },
+
+  localWins: {
+    ...ACTION_GLASS,
+    backgroundColor: 'rgba(50, 201, 59, 0.16)',
+    borderColor: 'rgba(74, 242, 91, 0.92)',
+    shadowColor: '#32C93B',
+  },
+
+  disabled: {
+    opacity: 0.45,
+  },
+
+  forgotButton: {
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    ...ACTION_GLASS,
+  },
+
+  forgotText: {
+    fontSize: 14,
+    textDecorationLine: 'none',
+    textShadowColor: 'rgba(116, 217, 255, 0.20)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 7,
+    ...ACTION_TEXT,
+  },
+
+  buttonText: {
+    fontSize: 15,
+    textAlign: 'center',
+    textShadowColor: 'rgba(255, 255, 255, 0.12)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+    ...ACTION_TEXT,
+  },
+
+  warning: {
+    color: '#FFD36A',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  small: {
+    color: '#B5C1CA',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+
+  message: {
+    color: '#FFFFFF',
+    backgroundColor: 'rgba(34, 79, 101, 0.50)',
+    borderWidth: 1,
+    borderColor: 'rgba(91, 209, 255, 0.38)',
+    padding: 14,
+    borderRadius: 16,
+    lineHeight: 20,
+    shadowColor: '#24C8FF',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 3,
+  },
 });
