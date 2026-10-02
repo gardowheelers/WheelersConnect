@@ -58,6 +58,11 @@ export default function ExploreScreen() {
         (presenceResult.data ?? []).map(row => row.user_id)
       );
 
+      // L'utilisateur qui regarde cet écran est forcément connecté.
+      // Cela évite un affichage transitoire à 0 pendant la toute première
+      // seconde où le heartbeat Supabase est encore en train de s'enregistrer.
+      onlineIds.add(userId);
+
       const onlineMembers = allMembers.filter(member => onlineIds.has(member.userId));
       setMembers(onlineMembers);
 
@@ -79,7 +84,7 @@ export default function ExploreScreen() {
     // Actualisation régulière pendant que l'écran Explore est ouvert.
     const interval = setInterval(() => {
       void loadMembers();
-    }, 10000);
+    }, 5000);
 
     return () => clearInterval(interval);
   }, [loadMembers]);
@@ -121,12 +126,18 @@ export default function ExploreScreen() {
             </Pressable>
           </View>
 
-          <View style={styles.summaryCard}>
-            <View style={styles.summaryLogoWrap}>
-              <Ionicons name="people" size={34} color={wcTheme.colors.green} />
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryRadarCard}>
+              <View style={styles.radarIcon}>
+                <View style={[styles.radarRing, styles.radarRingOuter]} />
+                <View style={[styles.radarRing, styles.radarRingMiddle]} />
+                <View style={[styles.radarRing, styles.radarRingInner]} />
+                <View style={styles.radarSweep} />
+                <View style={styles.radarDot} />
+              </View>
             </View>
 
-            <View style={styles.summaryContent}>
+            <View style={styles.summaryMembersCard}>
               <Text style={styles.summaryNumber}>{members.length}</Text>
               <Text style={styles.summaryLabel}>
                 {members.length > 1 ? 'membres connectés' : 'membre connecté'}
@@ -408,51 +419,116 @@ const styles = StyleSheet.create({
     ...ACTION_GLASS,
   },
 
-  summaryCard: {
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
+    marginBottom: 22,
+  },
+
+  summaryRadarCard: {
+    width: 82,
+    minHeight: 82,
+    borderRadius: 22,
     backgroundColor: wcTheme.colors.glassStrong,
     borderWidth: 1,
     borderColor: wcTheme.colors.border,
-    borderRadius: 24,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 22,
-    ...wcTheme.shadow.glow,
-  },
-
-  summaryLogoWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: wcTheme.colors.panelStrong,
-    borderWidth: 1,
-    borderColor: wcTheme.colors.border,
-    marginRight: 14,
     alignItems: 'center',
     justifyContent: 'center',
     ...wcTheme.shadow.greenGlow,
   },
 
-  summaryLogo: {
-    width: '100%',
-    height: '100%',
+  summaryMembersCard: {
+    flex: 1,
+    minHeight: 82,
+    borderRadius: 22,
+    backgroundColor: wcTheme.colors.glassStrong,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    ...wcTheme.shadow.glow,
   },
 
-  summaryContent: {
-    flex: 1,
+  radarIcon: {
+    width: 50,
+    height: 50,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  radarRing: {
+    position: 'absolute',
+    borderWidth: 1.2,
+    borderColor: 'rgba(74, 242, 91, 0.72)',
+  },
+
+  radarRingOuter: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+
+  radarRingMiddle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+  },
+
+  radarRingInner: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+  },
+
+  radarSweep: {
+    position: 'absolute',
+    width: 24,
+    height: 2.5,
+    borderRadius: 2,
+    backgroundColor: wcTheme.colors.green,
+    left: 24,
+    top: 23.5,
+    transform: [{ rotate: '-42deg' }],
+    shadowColor: wcTheme.colors.green,
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
+  },
+
+  radarDot: {
+    position: 'absolute',
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: wcTheme.colors.green,
+    right: 8,
+    top: 10,
+    shadowColor: wcTheme.colors.green,
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 10,
   },
 
   summaryNumber: {
     color: wcTheme.colors.text,
-    fontSize: 28,
+    fontSize: 34,
+    lineHeight: 38,
     fontWeight: '900',
+    width: '100%',
+    textAlign: 'center',
   },
 
   summaryLabel: {
     color: wcTheme.colors.cyanSoft,
     fontSize: 14,
     fontWeight: '800',
+    width: '100%',
+    textAlign: 'center',
     marginTop: 2,
   },
 
