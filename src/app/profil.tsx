@@ -941,7 +941,11 @@ function ProfileContent() {
 
             <Text style={styles.statNumber}>{Object.values(wheels).filter(item => item.name.trim()).length}</Text>
 
-            <Text style={styles.statLabel}>{t('wheels')}</Text>
+            <Text style={styles.statLabel}>
+              {Object.values(wheels).filter(item => item.name.trim()).length === 1
+                ? t('wheels').replace(/s$/, '')
+                : t('wheels')}
+            </Text>
 
           </View>
 

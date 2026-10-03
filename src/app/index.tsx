@@ -116,7 +116,7 @@ export default function HomeScreen() {
             <View style={styles.communityCopy}>
               <Text style={styles.communityText}>
                 {userId
-                  ? (onlineCount > 1 ? 'membres connectés' : 'membre connecté')
+                  ? (onlineCount === 1 ? 'membre connecté' : 'membres connectés')
                   : t('communityLoginShort')}
               </Text>
               <Text style={styles.communityLink}>{t('seeMembers')} ›</Text>
@@ -126,7 +126,7 @@ export default function HomeScreen() {
 
         <View style={styles.featureRow}>
           <View style={[styles.featureCard, styles.rideFeatureCard]}>
-            <Text style={[styles.featureEyebrow, styles.rideFeatureEyebrow]}>SORTIE(S)</Text>
+            <Text style={[styles.featureEyebrow, styles.rideFeatureEyebrow]}>SORTIES</Text>
 
             <View style={styles.rideCountBody}>
               <Pressable
