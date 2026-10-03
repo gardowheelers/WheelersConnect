@@ -20,6 +20,8 @@ export type DirectMessage = {
   recipientId: string;
   body: string;
   createdAt: string;
+  deliveredAt: string | null;
+  readAt: string | null;
 };
 
 export async function listMembers(includeSelf = false): Promise<MemberDirectoryEntry[]> {
@@ -50,7 +52,7 @@ export async function listDirectMessages(userId: string): Promise<DirectMessage[
   const db = getSupabase();
   const { data, error } = await db
     .from('direct_messages')
-    .select('id,sender_id,recipient_id,body,created_at')
+    .select('id,sender_id,recipient_id,body,created_at,delivered_at,read_at')
     .or(`sender_id.eq.${userId},recipient_id.eq.${userId}`)
     .order('created_at', { ascending: true });
   if (error) throw error;
@@ -60,7 +62,19 @@ export async function listDirectMessages(userId: string): Promise<DirectMessage[
     recipientId: String(row.recipient_id),
     body: String(row.body),
     createdAt: String(row.created_at),
+    deliveredAt: row.delivered_at ? String(row.delivered_at) : null,
+    readAt: row.read_at ? String(row.read_at) : null,
   }));
+}
+
+export async function markDirectMessagesDelivered(): Promise<void> {
+  const { error } = await getSupabase().rpc('mark_direct_messages_delivered');
+  if (error) throw error;
+}
+
+export async function markDirectMessagesRead(peerId: string): Promise<void> {
+  const { error } = await getSupabase().rpc('mark_direct_messages_read', { peer_id: peerId });
+  if (error) throw error;
 }
 
 export async function sendDirectMessage(senderId: string, recipientId: string, body: string) {

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuth } from '../auth/auth-provider';
 import { ScreenBackButton } from '../components/screen-back-button';
-import { listDirectMessages, listMembers, sendDirectMessage, type DirectMessage, type MemberDirectoryEntry } from '../data/community-messages';
+import { listDirectMessages, listMembers, markDirectMessagesDelivered, markDirectMessagesRead, sendDirectMessage, type DirectMessage, type MemberDirectoryEntry } from '../data/community-messages';
 import { t } from '../i18n/i18n';
 import { getSupabase } from '../lib/supabase';
 
@@ -38,7 +38,7 @@ function MessagesContent() {
     setStatus('');
     try {
       const presenceCutoff = new Date(Date.now() - 90000).toISOString();
-      const [memberRows, messageRows, presenceResult] = await Promise.all([
+      const [memberRows, initialMessageRows, presenceResult] = await Promise.all([
         listMembers(),
         listDirectMessages(userId),
         getSupabase()
@@ -47,6 +47,17 @@ function MessagesContent() {
           .gte('updated_at', presenceCutoff),
       ]);
       if (presenceResult.error) throw presenceResult.error;
+
+      // Un message devient « distribué » lorsque l'application du destinataire
+      // l'a effectivement récupéré depuis Supabase.
+      let messageRows = initialMessageRows;
+      const hasUndeliveredIncoming = initialMessageRows.some((message) =>
+        message.recipientId === userId && !message.deliveredAt);
+      if (hasUndeliveredIncoming) {
+        await markDirectMessagesDelivered();
+        messageRows = await listDirectMessages(userId);
+      }
+
       if (version !== requestVersion.current) return;
 
       setMembers(memberRows);
@@ -102,6 +113,31 @@ function MessagesContent() {
         (message.senderId === userId && message.recipientId === selected.userId) ||
         (message.senderId === selected.userId && message.recipientId === userId))
     : [];
+
+  const selectedUnreadCount = useMemo(() => {
+    if (!selected) return 0;
+    return messages.filter((message) =>
+      message.senderId === selected.userId &&
+      message.recipientId === userId &&
+      !message.readAt).length;
+  }, [messages, selected?.userId, userId]);
+
+  useEffect(() => {
+    if (!selected || !userId || selectedUnreadCount === 0) return;
+    let active = true;
+
+    const markRead = async () => {
+      try {
+        await markDirectMessagesRead(selected.userId);
+        if (active) await refresh(true);
+      } catch {
+        if (active) setStatus(t('messagingUnavailable'));
+      }
+    };
+
+    void markRead();
+    return () => { active = false; };
+  }, [selected?.userId, selectedUnreadCount, userId, refresh]);
 
   async function send() {
     if (!selected || !userId || !draft.trim() || sendingRef.current) return;
@@ -195,8 +231,22 @@ function MessagesContent() {
             {selectedMessages.length === 0 ? <Text style={styles.emptyThread}>{t('startConversation')}</Text> : null}
             {selectedMessages.map((message) => {
               const mine = message.senderId === userId;
+              const receipt = message.readAt
+                ? { symbol: '✓✓', label: 'Lu', read: true }
+                : message.deliveredAt
+                  ? { symbol: '✓✓', label: 'Distribué', read: false }
+                  : { symbol: '✓', label: 'Envoyé', read: false };
+
               return <View key={message.id} style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
                 <Text style={[styles.bubbleText, mine ? styles.myBubbleText : undefined]}>{message.body}</Text>
+                {mine ? (
+                  <Text
+                    accessibilityLabel={receipt.label}
+                    style={[styles.receiptText, receipt.read ? styles.receiptRead : styles.receiptPending]}
+                  >
+                    {receipt.symbol}
+                  </Text>
+                ) : null}
               </View>;
             })}
           </ScrollView>
@@ -401,6 +451,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
     backgroundColor: 'rgba(50, 201, 59, 0.20)',
     borderColor: 'rgba(74, 242, 91, 0.78)',
+    paddingRight: 30,
   },
   theirBubble: {
     alignSelf: 'flex-start',
@@ -409,6 +460,17 @@ const styles = StyleSheet.create({
   },
   bubbleText: { color: '#E8F1F5', fontSize: 15, lineHeight: 20 },
   myBubbleText: { color: '#F3FFF4' },
+  receiptText: {
+    position: 'absolute',
+    right: 9,
+    bottom: 7,
+    fontSize: 14,
+    lineHeight: 15,
+    fontWeight: '900',
+    letterSpacing: -2,
+  },
+  receiptPending: { color: '#91AAB7' },
+  receiptRead: { color: '#2FE8FF' },
   composer: {
     padding: 12,
     paddingBottom: 24,
