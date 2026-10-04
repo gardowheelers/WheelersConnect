@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import MapView, { Marker, Polyline, type LatLng } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScreenBackButton } from '../components/screen-back-button';
@@ -13,7 +13,25 @@ import { wcTheme } from '../theme/wheelers-theme';
 const Location = require('expo-location') as any;
 
 type Point = { latitude: number; longitude: number; timestamp: number; speed: number | null; accuracy: number | null };
-type SavedRide = { id: string; startedAt: number; endedAt: number; distanceM: number; points: Point[] };
+type RechargeStatus = 'allowed' | 'ask' | 'refused';
+type RechargeStop = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+  name: string;
+  placeType: string;
+  status: RechargeStatus;
+  note: string;
+};
+type SavedRide = {
+  id: string;
+  startedAt: number;
+  endedAt: number;
+  distanceM: number;
+  points: Point[];
+  rechargeStops?: RechargeStop[];
+};
 
 const STORAGE_KEY = 'wheelers-connect:gps-rides:v1';
 const SELECTED_RIDE_KEY = 'wheelers-connect:gps-selected-ride:v1';
@@ -84,6 +102,14 @@ export default function ParcoursGpsScreen() {
   const [lastAccuracy, setLastAccuracy] = useState<number | null>(null);
   const [lastStepM, setLastStepM] = useState(0);
   const [savedRides, setSavedRides] = useState<SavedRide[]>([]);
+  const [rechargeStops, setRechargeStops] = useState<RechargeStop[]>([]);
+  const [rechargeModalVisible, setRechargeModalVisible] = useState(false);
+  const [rechargeCoordinate, setRechargeCoordinate] = useState<LatLng | null>(null);
+  const [rechargeName, setRechargeName] = useState('');
+  const [rechargePlaceType, setRechargePlaceType] = useState('Café / bar');
+  const [rechargeStatus, setRechargeStatus] = useState<RechargeStatus>('allowed');
+  const [rechargeNote, setRechargeNote] = useState('');
+  const [rechargeLocating, setRechargeLocating] = useState(false);
   const watchRef = useRef<any>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastAcceptedRef = useRef<Point | null>(null);
@@ -230,7 +256,7 @@ export default function ParcoursGpsScreen() {
   };
 
   const start = async () => {
-    setPoints([]); setDistanceM(0); setElapsed(0); setLastStepM(0); setLastAccuracy(null); setGpsMessage('Initialisation du GPS…');
+    setPoints([]); setDistanceM(0); setElapsed(0); setLastStepM(0); setLastAccuracy(null); setRechargeStops([]); setGpsMessage('Initialisation du GPS…');
     lastAcceptedRef.current = null; distanceAnchorRef.current = null; lastUpdateAtRef.current = 0;
     const ok = await beginWatch();
     if (!ok) return;
@@ -251,7 +277,7 @@ export default function ParcoursGpsScreen() {
       return;
     }
 
-    const ride: SavedRide = { id: String(Date.now()), startedAt, endedAt: Date.now(), distanceM, points };
+    const ride: SavedRide = { id: String(Date.now()), startedAt, endedAt: Date.now(), distanceM, points, rechargeStops };
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     const existing: SavedRide[] = raw ? JSON.parse(raw) : [];
     const updated = [ride, ...existing].slice(0, 50);
@@ -260,6 +286,59 @@ export default function ParcoursGpsScreen() {
     setStatus('idle'); setStartedAt(null);
     Alert.alert('Parcours enregistré', `${(distanceM / 1000).toFixed(2)} km enregistrés sur cet iPhone.`);
   };
+
+
+  const openRechargeModal = async () => {
+    if (rechargeLocating || status === 'idle') return;
+    setRechargeLocating(true);
+    try {
+      let coordinate: LatLng | null = latestCoordinate;
+      if (!coordinate) {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+        coordinate = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+      }
+      if (!coordinate) {
+        Alert.alert('Position indisponible', 'Impossible de placer ce point de recharge pour le moment.');
+        return;
+      }
+      setRechargeCoordinate(coordinate);
+      setRechargeName('');
+      setRechargePlaceType('Café / bar');
+      setRechargeStatus('allowed');
+      setRechargeNote('');
+      setRechargeModalVisible(true);
+    } catch {
+      Alert.alert('Position indisponible', 'Impossible de récupérer votre position pour ce point de recharge.');
+    } finally {
+      setRechargeLocating(false);
+    }
+  };
+
+  const saveRechargeStop = () => {
+    const name = rechargeName.trim();
+    if (!rechargeCoordinate || !name) {
+      Alert.alert('Nom du lieu', 'Indiquez le nom du café, de la brasserie ou du lieu de recharge.');
+      return;
+    }
+
+    const stop: RechargeStop = {
+      id: `recharge-${Date.now()}`,
+      latitude: rechargeCoordinate.latitude,
+      longitude: rechargeCoordinate.longitude,
+      timestamp: Date.now(),
+      name,
+      placeType: rechargePlaceType,
+      status: rechargeStatus,
+      note: rechargeNote.trim(),
+    };
+
+    setRechargeStops((current) => [...current, stop]);
+    setRechargeModalVisible(false);
+    setRechargeCoordinate(null);
+  };
+
+  const rechargeStatusLabel = (value: RechargeStatus) =>
+    value === 'allowed' ? 'Recharge autorisée' : value === 'ask' ? 'Demander avant' : 'Recharge refusée';
 
   const deleteRide = (ride: SavedRide) => {
     Alert.alert(
@@ -413,6 +492,19 @@ export default function ParcoursGpsScreen() {
                 </View>
               </Marker>
             ) : null}
+
+            {rechargeStops.map((stop) => (
+              <Marker
+                key={stop.id}
+                coordinate={{ latitude: stop.latitude, longitude: stop.longitude }}
+                title={stop.name}
+                description={rechargeStatusLabel(stop.status)}
+              >
+                <View style={styles.rechargeMarker}>
+                  <Ionicons name="flash" size={16} color={wcTheme.colors.bg} />
+                </View>
+              </Marker>
+            ))}
           </MapView>
 
           <View style={styles.mapTop}>
@@ -508,6 +600,30 @@ export default function ParcoursGpsScreen() {
             <Text style={styles.primaryText}>Démarrer le parcours</Text>
           </Pressable>
         ) : (
+          <>
+          <Pressable
+            style={styles.rechargeButton}
+            onPress={() => void openRechargeModal()}
+            disabled={rechargeLocating}
+          >
+            <View style={styles.rechargeButtonIcon}>
+              <Ionicons name="flash" size={22} color={wcTheme.colors.bg} />
+            </View>
+            <View style={styles.rechargeButtonTextWrap}>
+              <Text style={styles.rechargeButtonTitle}>
+                {rechargeLocating ? 'Localisation…' : 'Ajouter une recharge'}
+              </Text>
+              <Text style={styles.rechargeButtonSubtitle}>
+                Café, brasserie, restaurant ou autre lieu accueillant
+              </Text>
+            </View>
+            {rechargeStops.length > 0 ? (
+              <View style={styles.rechargeCountBadge}>
+                <Text style={styles.rechargeCountText}>{rechargeStops.length}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+
           <View style={styles.actions}>
             {status === 'recording' ? (
               <Pressable style={styles.secondary} onPress={pause}>
@@ -526,6 +642,7 @@ export default function ParcoursGpsScreen() {
               <Text style={styles.secondaryText}>Terminer</Text>
             </Pressable>
           </View>
+          </>
         )}
 
         {status !== 'idle' ? (
@@ -586,6 +703,11 @@ export default function ParcoursGpsScreen() {
                     {(ride.distanceM / 1000).toFixed(2)} km • {formatDuration(ride.endedAt - ride.startedAt)}
                   </Text>
                   <Text style={styles.ridePoints}>{ride.points.length} points GPS conservés</Text>
+                  {(ride.rechargeStops?.length ?? 0) > 0 ? (
+                    <Text style={styles.rideRecharge}>
+                      ⚡ {ride.rechargeStops!.length} point{ride.rechargeStops!.length > 1 ? 's' : ''} de recharge
+                    </Text>
+                  ) : null}
                 </View>
 
                 <Ionicons name="chevron-forward" size={23} color={wcTheme.colors.green} />
@@ -602,6 +724,103 @@ export default function ParcoursGpsScreen() {
           ))}
         </View>
       </ScrollView>
+
+      <Modal
+        visible={rechargeModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRechargeModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.rechargeModal}>
+            <View style={styles.rechargeModalHeader}>
+              <View style={styles.rechargeModalIcon}>
+                <Ionicons name="flash" size={24} color={wcTheme.colors.bg} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rechargeModalTitle}>Point de recharge</Text>
+                <Text style={styles.rechargeModalSubtitle}>
+                  Le GPS place automatiquement ce lieu sur votre parcours.
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.fieldLabel}>Nom du lieu</Text>
+            <TextInput
+              value={rechargeName}
+              onChangeText={setRechargeName}
+              placeholder="Ex. Café de la Place"
+              placeholderTextColor={wcTheme.colors.textSoft}
+              style={styles.fieldInput}
+              autoCapitalize="words"
+            />
+
+            <Text style={styles.fieldLabel}>Type de lieu</Text>
+            <View style={styles.choiceWrap}>
+              {['Café / bar', 'Brasserie', 'Restaurant', 'Commerce', 'Autre'].map((value) => (
+                <Pressable
+                  key={value}
+                  style={[styles.choiceChip, rechargePlaceType === value && styles.choiceChipSelected]}
+                  onPress={() => setRechargePlaceType(value)}
+                >
+                  <Text style={[styles.choiceChipText, rechargePlaceType === value && styles.choiceChipTextSelected]}>
+                    {value}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.fieldLabel}>Recharge de la gyroroue</Text>
+            <View style={styles.statusChoices}>
+              {([
+                ['allowed', 'checkmark-circle', 'Autorisée'],
+                ['ask', 'help-circle', 'Demander'],
+                ['refused', 'close-circle', 'Refusée'],
+              ] as const).map(([value, icon, label]) => (
+                <Pressable
+                  key={value}
+                  style={[styles.statusChoice, rechargeStatus === value && styles.statusChoiceSelected]}
+                  onPress={() => setRechargeStatus(value)}
+                >
+                  <Ionicons
+                    name={icon}
+                    size={20}
+                    color={rechargeStatus === value ? wcTheme.colors.green : wcTheme.colors.textMuted}
+                  />
+                  <Text style={[styles.statusChoiceText, rechargeStatus === value && styles.statusChoiceTextSelected]}>
+                    {label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.fieldLabel}>Note facultative</Text>
+            <TextInput
+              value={rechargeNote}
+              onChangeText={setRechargeNote}
+              placeholder="Ex. prise derrière le comptoir, consommation demandée…"
+              placeholderTextColor={wcTheme.colors.textSoft}
+              style={[styles.fieldInput, styles.noteInput]}
+              multiline
+              maxLength={240}
+            />
+
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalCancel} onPress={() => setRechargeModalVisible(false)}>
+                <Text style={styles.modalCancelText}>Annuler</Text>
+              </Pressable>
+              <Pressable style={styles.modalSave} onPress={saveRechargeStop}>
+                <Ionicons name="flash" size={19} color={wcTheme.colors.bg} />
+                <Text style={styles.modalSaveText}>Enregistrer ce lieu</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -741,6 +960,20 @@ const styles = StyleSheet.create({
   currentMarkerInner: {
     width: 12, height: 12, borderRadius: 6,
     backgroundColor: wcTheme.colors.cyan,
+  },
+  rechargeMarker: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: wcTheme.colors.green,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    shadowColor: wcTheme.colors.green,
+    shadowOpacity: 0.7,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
   },
 
   dashboard: {
@@ -900,6 +1133,42 @@ const styles = StyleSheet.create({
   primaryText: { color: wcTheme.colors.green, fontSize: 19, fontWeight: '900',
     ...ACTION_TEXT, },
 
+  rechargeButton: {
+    minHeight: 72,
+    marginTop: 14,
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(87,243,107,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(87,243,107,0.70)',
+    ...wcTheme.shadow.greenGlow,
+  },
+  rechargeButtonIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: wcTheme.colors.green,
+  },
+  rechargeButtonTextWrap: { flex: 1 },
+  rechargeButtonTitle: { color: wcTheme.colors.text, fontSize: 16, fontWeight: '900' },
+  rechargeButtonSubtitle: { color: wcTheme.colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  rechargeCountBadge: {
+    minWidth: 30,
+    height: 30,
+    borderRadius: 15,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: wcTheme.colors.green,
+  },
+  rechargeCountText: { color: wcTheme.colors.bg, fontSize: 14, fontWeight: '900' },
+
   actions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   secondary: {
     flex: 1,
@@ -985,4 +1254,101 @@ const styles = StyleSheet.create({
   rideDate: { color: wcTheme.colors.text, fontSize: 15, fontWeight: '900' },
   rideMeta: { color: wcTheme.colors.textMuted, fontSize: 12, fontWeight: '700', marginTop: 4 },
   ridePoints: { color: wcTheme.colors.textSoft, fontSize: 11, fontWeight: '700', marginTop: 3 },
+  rideRecharge: { color: wcTheme.colors.green, fontSize: 11, fontWeight: '800', marginTop: 4 },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    justifyContent: 'flex-end',
+    padding: 14,
+  },
+  rechargeModal: {
+    borderRadius: 28,
+    padding: 18,
+    paddingBottom: 22,
+    backgroundColor: '#09212B',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.border,
+    ...wcTheme.shadow.glow,
+  },
+  rechargeModalHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 18 },
+  rechargeModalIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: wcTheme.colors.green,
+  },
+  rechargeModalTitle: { color: wcTheme.colors.text, fontSize: 22, fontWeight: '900' },
+  rechargeModalSubtitle: { color: wcTheme.colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 3 },
+  fieldLabel: { color: wcTheme.colors.text, fontSize: 13, fontWeight: '900', marginTop: 12, marginBottom: 7 },
+  fieldInput: {
+    minHeight: 48,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    color: wcTheme.colors.text,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+    fontSize: 14,
+  },
+  noteInput: { minHeight: 78, textAlignVertical: 'top' },
+  choiceWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  choiceChip: {
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+    backgroundColor: 'rgba(255,255,255,0.035)',
+  },
+  choiceChipSelected: {
+    borderColor: wcTheme.colors.cyan,
+    backgroundColor: 'rgba(56,231,255,0.12)',
+  },
+  choiceChipText: { color: wcTheme.colors.textMuted, fontSize: 12, fontWeight: '800' },
+  choiceChipTextSelected: { color: wcTheme.colors.text },
+  statusChoices: { flexDirection: 'row', gap: 7 },
+  statusChoice: {
+    flex: 1,
+    minHeight: 58,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+    backgroundColor: 'rgba(255,255,255,0.035)',
+  },
+  statusChoiceSelected: {
+    borderColor: wcTheme.colors.green,
+    backgroundColor: 'rgba(87,243,107,0.10)',
+  },
+  statusChoiceText: { color: wcTheme.colors.textMuted, fontSize: 10, fontWeight: '800', textAlign: 'center' },
+  statusChoiceTextSelected: { color: wcTheme.colors.text },
+  modalActions: { flexDirection: 'row', gap: 9, marginTop: 18 },
+  modalCancel: {
+    flex: 0.8,
+    minHeight: 50,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: wcTheme.colors.borderSoft,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  modalCancelText: { color: wcTheme.colors.textMuted, fontSize: 14, fontWeight: '900' },
+  modalSave: {
+    flex: 1.4,
+    minHeight: 50,
+    borderRadius: 17,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: wcTheme.colors.green,
+  },
+  modalSaveText: { color: wcTheme.colors.bg, fontSize: 14, fontWeight: '900' },
 });
