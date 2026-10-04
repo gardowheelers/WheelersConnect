@@ -106,7 +106,7 @@ export default function HomeScreen() {
               style={styles.mapLogo}
               resizeMode="cover"
             />
-            <Text style={styles.mapTitle}>Ils sont connectés</Text>
+            <Text style={styles.mapTitle}>{t('connectedTitle')}</Text>
           </View>
 
           <View style={styles.communityCountRow}>
@@ -116,7 +116,7 @@ export default function HomeScreen() {
             <View style={styles.communityCopy}>
               <Text style={styles.communityText}>
                 {userId
-                  ? (onlineCount === 1 ? 'membre connecté' : 'membres connectés')
+                  ? (onlineCount === 1 ? t('memberOnlineSingle') : t('membersOnlinePlural'))
                   : t('communityLoginShort')}
               </Text>
               <Text style={styles.communityLink}>{t('seeMembers')} ›</Text>
@@ -126,12 +126,12 @@ export default function HomeScreen() {
 
         <View style={styles.featureRow}>
           <View style={[styles.featureCard, styles.rideFeatureCard]}>
-            <Text style={[styles.featureEyebrow, styles.rideFeatureEyebrow]}>SORTIES</Text>
+            <Text style={[styles.featureEyebrow, styles.rideFeatureEyebrow]}>{t('rides').toLocaleUpperCase()}</Text>
 
             <View style={styles.rideCountBody}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Voir les sorties programmées : ${upcomingRideCount}`}
+                accessibilityLabel={`${t('scheduledRidesAccessibility')} : ${upcomingRideCount}`}
                 onPress={() => navigate('/sorties')}
                 style={({ pressed }) => [
                   styles.rideCountButton,
@@ -146,10 +146,10 @@ export default function HomeScreen() {
           <Pressable
             style={[styles.featureCard, styles.creatorFeatureCard]}
             accessibilityRole="link"
-            accessibilityLabel="Ouvrir la chaîne YouTube Happy Wheels"
+            accessibilityLabel={t('openYoutubeHappyWheels')}
             onPress={() => void Linking.openURL('https://www.youtube.com/@HappyWheels-euc')}
           >
-            <Text style={[styles.featureEyebrow, styles.creatorFeatureEyebrow]}>À DÉCOUVRIR</Text>
+            <Text style={[styles.featureEyebrow, styles.creatorFeatureEyebrow]}>{t('discover').toLocaleUpperCase()}</Text>
 
             <View style={styles.creatorFeatureBody}>
               <View style={styles.youtubeMark}>
